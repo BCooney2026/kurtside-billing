@@ -119,7 +119,7 @@
           <div class="kicker" style="margin-bottom:4px;">From</div>
           <div class="party">
             <b><?= data.biz.name ?></b><br>
-            <?= data.biz.owner ?><? if (data.biz.phone) { ?> &nbsp;&middot;&nbsp; <?= data.biz.phone ?><? } ?><br>
+            <?= data.biz.owner ?><? if (data.biz.phone) { ?> &nbsp;&middot;&nbsp; <span style="white-space:nowrap"><?= data.biz.phone ?></span><? } ?><br>
             <?= data.biz.email ?>
           </div>
         </div>
@@ -180,7 +180,7 @@
       <td style="width:50%;">
         <div class="h">Please note</div>
         Write invoice <b>#<?= data.number ?></b> on your check.<br>
-        Questions? Reply to the email or call <?= data.biz.owner ?><? if (data.biz.phone) { ?> at <?= data.biz.phone ?><? } ?>.
+        Questions? Reply to the email or call <?= data.biz.owner ?><? if (data.biz.phone) { ?> at <span style="white-space:nowrap"><?= data.biz.phone ?></span><? } ?>.
       </td>
     </tr>
   </table>
