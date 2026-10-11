@@ -252,11 +252,10 @@
   .sysgrid div { padding: 9px 0; border-bottom: 1px solid var(--line-soft); font-size: 13px; }
   .sysgrid div span { display: block; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; margin-bottom: 2px; }
 
-  .sendgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .sendbtn { text-align: left; border: 1px solid var(--line); background: linear-gradient(180deg, var(--card-hi), var(--card)); border-radius: 16px; padding: 14px; cursor: pointer; }
-  .sendbtn b { display: block; font-size: 15px; margin-bottom: 3px; }
-  .sendbtn span { font-size: 12px; color: var(--muted); }
-  .sendbtn .em { font-size: 20px; display: block; margin-bottom: 6px; }
+  .acct { cursor: pointer; }
+  .acct:active { background: rgba(255,255,255,.03); }
+  .acct .chev { color: var(--gold); font-size: 20px; margin-left: 4px; }
+  .sec { font-family: var(--display); font-size: 12px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; color: var(--gold); margin: 18px 2px 8px; }
   .pick { display: flex; align-items: flex-start; gap: 12px; padding: 12px 2px; border-bottom: 1px solid var(--line-soft); cursor: pointer; }
   .pick:last-child { border-bottom: 0; }
   .pick input { width: 22px; height: 22px; accent-color: var(--gold); flex: none; margin-top: 1px; }
@@ -800,7 +799,7 @@
     const m = D.money, w = D.work, wa = D.water, sy = D.system;
     if (m.lateCount) out.push(['fix', `${m.lateCount} late invoice${m.lateCount === 1 ? '' : 's'}: ${money(m.lateTotal)} past due`]);
     wa.pools.filter(p => p.worst === 'fix').forEach(p => out.push(['fix', `${esc(p.name)}'s water needs adjusting (${p.flags.filter(f => f.status === 'fix').map(f => esc(f.label)).join(', ')})`]));
-    w.weekly.filter(x => x.overdue).forEach(x => out.push(['watch', x.daysSince === null
+    w.accounts.filter(x => x.overdue).forEach(x => out.push(['watch', x.daysSince === null
       ? `${esc(x.name)}: no ${x.biweekly ? 'biweekly' : 'weekly'} visit logged yet`
       : `${esc(x.name)}: last visit ${ago(x.daysSince)}${x.biweekly ? ' (biweekly)' : ''}`]));
     if (m.truck.cash + m.truck.checks > 0) out.push(['watch', `Deposit: ${money(m.truck.cash)} cash and ${money(m.truck.checks)} in checks taken this week`]);
@@ -884,11 +883,6 @@
         ? `<ul class="heads">${heads.map(([st, t]) => `<li><span class="ic ${st}">${ICON[st]}</span><span>${t}</span></li>`).join('')}</ul>`
         : `<ul class="heads"><li><span class="ic good">${ICON.good}</span><span>All clear. Nothing needs you right now.</span></li></ul>`}</div>
 
-      <div class="lbl">Send to clients</div>
-      <div class="sendgrid">
-        ${Object.keys(SEND_TYPES).map(k => `<button class="sendbtn" onclick="openSend('${k}')"><span class="em">${SEND_TYPES[k].icon}</span><b>${SEND_TYPES[k].title}</b><span>${SEND_TYPES[k].blurb}</span></button>`).join('')}
-      </div>
-
       <div class="lbl">Money</div>
       <div class="tiles">
         <div class="tile wide"><div class="k">Owed to you</div><div class="v money-big" style="font-size:34px">${money(m.owed)}</div>
@@ -927,10 +921,9 @@
         <div class="tile"><div class="k">Visits this week</div><div class="v">${w.visitsThisWeek}</div><div class="s">last 7 days</div></div>
         <div class="tile"><div class="k">Jobs this month</div><div class="v">${w.jobsThisMonth}</div><div class="s">everything logged</div></div>
       </div>
-      <div class="card list" style="margin-top:10px"><div style="font-weight:800;margin-bottom:4px">Weekly pools</div>
-        ${w.weekly.length ? w.weekly.map(x => `<div class="item row"><div class="grow"><div style="font-weight:700">${esc(x.name)}${x.biweekly ? ' <span class="muted">(biweekly)</span>' : ''}</div>
-          <div class="muted">${x.daysSince === null ? 'No visit logged yet' : 'Last visit ' + ago(x.daysSince)}</div></div>
-          <span class="stlabel ${x.overdue ? 'watch' : 'good'}">${x.overdue ? ICON.watch + ' Due' : ICON.good + ' On track'}</span></div>`).join('') : '<div class="empty">No weekly clients.</div>'}
+      <div class="card list" style="margin-top:10px"><div style="font-weight:800;margin-bottom:2px">Client Accounts</div>
+        <div class="muted" style="margin-bottom:4px">Tap a client to bill, record payments, or see history.</div>
+        ${w.accounts.length ? w.accounts.map(acctRow).join('') : '<div class="empty">No clients yet.</div>'}
       </div>
       <div class="card" style="margin-top:10px"><div class="ring">${closingRing(w.closings, w.clientCount)}
         <div><div style="font-weight:800">Closings: ${w.closings} of ${w.clientCount} done</div><div class="muted">Openings this year: ${w.openings}</div></div></div>
@@ -948,79 +941,98 @@
       </div></div>`;
   }
 
-  // ----- Send to clients (Dash) -----
-  // Two passes per send: preview (who gets what, all eligible pre-checked) then send.
-  const SEND_TYPES = {
-    invoices: { icon: '&#129534;', title: 'Bill now', blurb: 'Invoice all unbilled work', verb: 'Create', noun: 'invoice' },
-    reminders: { icon: '&#128276;', title: 'Payment reminder', blurb: 'Nudge open balances', verb: 'Send', noun: 'reminder' },
-    reports: { icon: '&#128167;', title: 'Pool reports', blurb: 'Latest water test to owners', verb: 'Send', noun: 'report' },
-    announce: { icon: '&#128227;', title: 'Announcement', blurb: 'Your own message', verb: 'Send', noun: 'email' },
-  };
+  // ----- Client Accounts (Dash) -----
+  /** One row: name, visit status (weekly clients), and money status. Tapping opens the account. */
+  function acctRow(a) {
+    const money1 = [a.unbilledCount ? `${whole(a.unbilled)} unbilled` : '', a.openCount ? `${whole(a.open)} open` : ''].filter(Boolean).join(' &middot; ');
+    const visit = a.weekly ? (a.daysSince === null ? 'No visit logged yet' : 'Last visit ' + ago(a.daysSince)) : 'Openings & closings';
+    const badge = a.late ? `<span class="stlabel fix">${ICON.fix} Late</span>`
+      : a.weekly ? `<span class="stlabel ${a.overdue ? 'watch' : 'good'}">${a.overdue ? ICON.watch + ' Due' : ICON.good + ' On track'}</span>`
+      : (a.unbilledCount ? '<span class="stlabel watch">To bill</span>' : '');
+    return `<div class="item row acct" onclick="openAccount('${esc(a.id)}')">
+      <div class="grow"><div style="font-weight:700">${esc(a.name)}${a.biweekly ? ' <span class="muted">(biweekly)</span>' : ''}</div>
+        <div class="muted">${visit}${money1 ? ' &middot; ' + money1 : ''}</div></div>
+      ${badge}<span class="chev">&rsaquo;</span></div>`;
+  }
 
-  async function openSend(type) {
+  async function openAccount(clientId) {
     if (S.busy) return;
-    setBusy(true, 'Checking who gets it...');
-    let res;
-    try { res = await call('emailCenter', { type, mode: 'preview' }); }
+    setBusy(true, 'Opening account...');
+    try { S.acct = await call('clientAccount', clientId); }
     catch (e) { setBusy(false); if (!(e && e.message === 'WRONG_PIN')) toast((e && e.message) || String(e), true); return; }
     setBusy(false);
-    const T = SEND_TYPES[type];
-    S.send = { type, rows: res.rows };
-    const empty = {
-      invoices: 'Nothing unbilled right now. Log some work first.',
-      reminders: 'Nobody owes you anything. Nice.',
-      reports: 'No water tests saved yet.',
-      announce: 'No clients yet.',
-    }[type];
+    renderAccount();
+  }
+
+  function renderAccount() {
+    const A = S.acct, c = A.client;
     openSheet(`
-      <h3>${T.title}</h3>
-      ${type === 'invoices' ? '<div class="muted" style="margin:-6px 0 10px">Invoices everything logged through today. Clients without email still get an invoice; you hand them the PDF.</div>' : ''}
-      ${type === 'announce' ? `
-        <label class="field"><span>Subject</span><input class="input" id="anSubject" placeholder="Pool closings start next week"></label>
-        <label class="field"><span>Message</span><textarea class="input" id="anMessage" style="min-height:130px" placeholder="Hi! I'm scheduling closings for the next two weeks. Reply with a day that works for you."></textarea></label>
-        <div class="muted" style="margin:-6px 2px 10px">Starts with "Hi (first name)," and ends with your name, so just write the middle.</div>` : ''}
+      <h3>${esc(c.name)}</h3>
+      <div class="muted" style="margin:-6px 0 6px">${c.email ? esc(c.email) : '<span style="color:#ffa3a3">No email: invoices are handed over</span>'}</div>
+
+      <div class="sec">Not billed yet</div>
       <div class="card list" style="padding:4px 14px">
-        ${res.rows.length ? res.rows.map(r => `
-          <label class="pick ${r.eligible ? '' : 'off'}">
-            <input type="checkbox" value="${esc(r.id)}" ${r.eligible ? 'checked' : 'disabled'} onchange="updateSendBtn()">
-            <div class="grow"><div style="font-weight:700">${esc(r.name)}</div><div class="muted">${esc(r.detail)}</div></div>
-          </label>`).join('') : `<div class="empty">${empty}</div>`}
+        ${A.unbilled.length ? A.unbilled.map(u => `
+          <label class="pick">
+            <input type="checkbox" value="${esc(u.id)}" data-amt="${u.amount}" checked onchange="updateBillBtn()">
+            <div class="grow"><div style="font-weight:700">${esc(u.description)}${u.qty > 1 ? ' x' + u.qty : ''}</div><div class="muted">${niceDate(u.date)}</div></div>
+            <div class="amt">${money(u.amount)}</div>
+          </label>`).join('') : '<div class="empty">Nothing waiting to be billed.</div>'}
       </div>
-      <div class="row" style="margin-top:14px">
-        <button class="btn ghost grow" onclick="closeSheet()">Cancel</button>
-        <button class="btn gold grow" id="sendBtn" onclick="sendNow()"></button>
-      </div>`);
-    updateSendBtn();
+      ${A.unbilled.length ? `<button class="btn gold big" id="billBtn" style="margin-top:12px" onclick="billChecked()"></button>
+        <div class="muted" style="margin:8px 2px 0">Unchecked items stay here for later. Anything still here on the 1st bills automatically.</div>` : ''}
+
+      <div class="sec">Open invoices</div>
+      <div class="card list">
+        ${A.open.length ? A.open.map(i => `
+          <div class="item">
+            <div class="row"><div class="grow"><div style="font-weight:800">#${esc(i.id)} &middot; ${niceDate(i.invoiceDate)}</div>
+              <div class="muted">${i.paid ? money(i.paid) + ' paid so far &middot; ' : ''}${i.daysLate ? `<span style="color:#ffa3a3">${i.daysLate} day${i.daysLate === 1 ? '' : 's'} late</span>` : 'Due ' + niceDate(i.dueDate)}</div></div>
+              <div class="amt">${money(i.balance)}</div></div>
+            <div class="actions">
+              <button class="btn gold sm" onclick="closeSheet(); openPay('${esc(i.id)}')">Got paid</button>
+              ${i.pdfUrl ? `<a class="btn ghost sm" href="${i.pdfUrl}" target="_blank">PDF</a>` : ''}
+              ${i.email ? `<button class="btn ghost sm" onclick="resend('${esc(i.id)}')">Resend</button>` : ''}
+            </div>
+          </div>`).join('') : '<div class="empty">Nothing open. All paid up.</div>'}
+      </div>
+
+      <div class="sec">Paid</div>
+      <div class="card list">
+        ${A.paid.length ? A.paid.map(i => `
+          <div class="item row"><div class="grow"><div style="font-weight:700">#${esc(i.id)} &middot; ${niceDate(i.invoiceDate)}</div>
+            <div class="muted">${i.paidDate ? 'Paid ' + niceDate(i.paidDate) : 'Paid'}</div></div>
+            <div style="text-align:right"><div class="amt">${money(i.total)}</div><span class="badge ok">Paid</span></div></div>`).join('') : '<div class="empty">No paid invoices yet.</div>'}
+      </div>
+      <button class="btn ghost big" onclick="closeSheet()">Close</button>`);
+    updateBillBtn();
   }
 
-  function pickedIds() { return [...document.querySelectorAll('#sheet .pick input:checked')].map(i => i.value); }
+  function checkedItems() { return [...document.querySelectorAll('#sheet .pick input:checked')]; }
 
-  function updateSendBtn() {
-    const n = pickedIds().length, T = SEND_TYPES[S.send.type];
-    $('sendBtn').disabled = !n;
-    $('sendBtn').textContent = n ? `${T.verb} ${n} ${T.noun}${n === 1 ? '' : 's'}` : 'Nobody selected';
+  function updateBillBtn() {
+    const btn = $('billBtn');
+    if (!btn) return;
+    const items = checkedItems();
+    const total = items.reduce((t, i) => t + Number(i.dataset.amt), 0);
+    btn.disabled = !items.length;
+    btn.textContent = items.length ? `Bill ${items.length} item${items.length === 1 ? '' : 's'}  ${money(total)}` : 'Check items to bill';
   }
 
-  async function sendNow() {
-    const ids = pickedIds(), T = SEND_TYPES[S.send.type];
-    const payload = { type: S.send.type, mode: 'send', ids };
-    if (S.send.type === 'announce') {
-      payload.subject = $('anSubject').value.trim();
-      payload.message = $('anMessage').value.trim();
-      if (!payload.subject || !payload.message) { toast('Add a subject and a message.', true); return; }
-    }
-    if (!ids.length) return;
-    if (!confirm(`${T.verb} ${ids.length} ${T.noun}${ids.length === 1 ? '' : 's'} now? This goes straight to your clients.`)) return;
-    setBusy(true, 'Sending...');
+  async function billChecked() {
+    const c = S.acct.client, items = checkedItems();
+    if (!items.length) return;
+    const total = items.reduce((t, i) => t + Number(i.dataset.amt), 0);
+    const how = c.email ? `and email it to ${c.email}` : '(no email on file, so you will hand them the PDF)';
+    if (!confirm(`Create one invoice for ${money(total)} ${how}?`)) return;
+    setBusy(true, 'Creating invoice...');
     try {
-      const res = await call('emailCenter', payload);
+      const res = await call('billSelected', { clientId: c.id, entryIds: items.map(i => i.value) });
       if (res && res.clients) { S.data = res; render(); }
-      const r = res.sendResult || { done: [], failed: [] };
-      closeSheet();
-      let msg = `Done: ${r.done.length} ${T.noun}${r.done.length === 1 ? '' : 's'}`;
-      if (r.handOver) msg += ` (${r.handOver} to hand over)`;
-      if (r.failed.length) msg += `. Failed: ${r.failed.join(', ')}`;
-      toast(msg, !!r.failed.length);
+      const b = res.billed;
+      toast(b.emailed ? `Invoice #${b.id} sent to ${b.email}` : `Invoice #${b.id} created. Hand them the PDF.`);
+      S.acct = await call('clientAccount', c.id);
+      renderAccount();
       loadDash();
     } catch (e) {
       if (!(e && e.message === 'WRONG_PIN')) toast((e && e.message) || String(e), true);
@@ -1112,7 +1124,7 @@
     const ok = await run('recordPayment', {
       invoiceId: id, amount: $('payAmt').value, method: S.payMethod, checkNo: $('payCheck').value, date: $('payDate').value,
     }, 'Payment saved');
-    if (ok) closeSheet();
+    if (ok) { closeSheet(); if (S.tab === 'dash') loadDash(); }
   }
 
   function resend(id) {

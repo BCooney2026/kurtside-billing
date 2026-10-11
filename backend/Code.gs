@@ -418,7 +418,7 @@ function api(pin, action, payload) {
     recordPayment: recordPayment_, resendInvoice: resendInvoice_,
     saveClient: saveClient_, savePrice: savePrice_, saveSettings: saveSettings_,
     readStrip: readStrip_, saveReading: saveReading_, dashboard: dashboard_,
-    emailCenter: emailCenter_,
+    clientAccount: clientAccount_, billSelected: billSelected_,
   };
   const handler = handlers[action];
   if (!handler) throw new Error('Unknown action: ' + action);
@@ -976,138 +976,6 @@ function sendPoolReport_(row, ai, s) {
 }
 
 // ============================================================
-// Email center (Dash tab > Send to clients). Button-only, nothing automatic.
-// Every type works in two passes: mode 'preview' lists who would get what,
-// mode 'send' sends to the ids Tommy left checked. Notes never go to clients.
-//   invoices   Bill now: invoice all unbilled work through today
-//   reports    Latest Pool Report to each owner
-//   reminders  Friendly balance reminder with the invoice PDF
-//   announce   Tommy's own subject + message to selected clients
-// ============================================================
-
-const EMAIL_TYPES = ['invoices', 'reports', 'reminders', 'announce'];
-
-/** p = { type, mode: 'preview' | 'send', ids: [...], subject, message } */
-function emailCenter_(p) {
-  const type = String(p && p.type);
-  if (EMAIL_TYPES.indexOf(type) < 0) throw new Error('Unknown email type.');
-  const rows = emailCandidates_(type);
-  if (p.mode !== 'send') return { type, rows: rows.map(r => ({ id: r.id, name: r.name, email: r.email, detail: r.detail, eligible: r.eligible })) };
-
-  const ids = (Array.isArray(p.ids) ? p.ids : []).map(String);
-  const picked = rows.filter(r => r.eligible && ids.indexOf(String(r.id)) >= 0);
-  if (!picked.length) throw new Error('Nobody selected.');
-  const subject = String(p.subject || '').trim();
-  const message = String(p.message || '').trim();
-  if (type === 'announce' && (!subject || !message)) throw new Error('Add a subject and a message.');
-
-  const emailsNeeded = type === 'invoices' ? picked.filter(r => r.email).length : picked.length;
-  if (MailApp.getRemainingDailyQuota() < emailsNeeded + 1) {
-    throw new Error('Gmail daily limit is too close. Only ' + MailApp.getRemainingDailyQuota() + ' emails left today. Try tomorrow.');
-  }
-
-  return withLock_(() => {
-    const s = getSettings_();
-    const done = [], failed = [];
-    if (type === 'invoices') {
-      const created = [];
-      picked.forEach(r => safely_('bill now ' + r.name, () => {
-        const inv = createInvoice_(r.client, r.entries, s);
-        if (inv) { created.push(inv); done.push(r.name); } else failed.push(r.name);
-      }));
-      if (created.length) safely_('billing summary', () => sendBillingSummary_(created, s));
-      return Object.assign(bootstrap_(), { sendResult: { done, failed, handOver: created.filter(i => !i.sentAt).length } });
-    }
-    picked.forEach(r => {
-      try {
-        if (type === 'reports') {
-          const body = poolReportBody_(r.reading, null, true);
-          sendClientEmailWithImages_(r.email, 'Your pool water report: ' + fmt_(r.reading.date, 'MMM d'), body.html + signoff_(s), s, body.photo ? { strip: body.photo } : null);
-        } else if (type === 'reminders') {
-          sendBalanceNote_(r.invoice, s);
-        } else {
-          const html = '<p>Hi ' + esc_(firstName_(r.name)) + ',</p>' +
-            message.split(/\n\s*\n/).map(par => '<p>' + esc_(par).replace(/\n/g, '<br>') + '</p>').join('') + signoff_(s);
-          sendClientEmail_(r.email, subject, html, s, []);
-        }
-        done.push(r.name);
-      } catch (e) {
-        console.error(type + ' to ' + r.name + ' failed: ' + e);
-        failed.push(r.name);
-      }
-    });
-    return { sendResult: { done, failed } };
-  });
-}
-
-/** Who each email type would go to, with a one-line detail. eligible = can actually be sent. */
-function emailCandidates_(type) {
-  const clients = readTable_(SHEETS.clients).filter(c => toBool_(c.active));
-  const emailOf = c => String(c.email || '').trim();
-
-  if (type === 'invoices') {
-    const groups = collectUnbilled_(addDays_(stripTime_(new Date()), 1));
-    const byId = indexBy_(readTable_(SHEETS.clients), 'id');
-    return Object.keys(groups).map(id => {
-      const c = byId[id];
-      if (!c) return null;
-      const entries = groups[id];
-      return {
-        id, name: String(c.name), email: emailOf(c), client: c, entries, eligible: true,
-        detail: entries.length + ' item' + (entries.length === 1 ? '' : 's') + ' · ' + money_(sumAmounts_(entries)) + (emailOf(c) ? '' : ' · no email, PDF to hand over'),
-      };
-    }).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
-  }
-
-  if (type === 'reports') {
-    const latest = {};
-    readTable_(SHEETS.readings).filter(r => r.date instanceof Date).forEach(r => {
-      const k = String(r.clientId); if (!latest[k] || r.date > latest[k].date) latest[k] = r;
-    });
-    return clients.filter(c => latest[String(c.id)]).map(c => {
-      const r = latest[String(c.id)];
-      return { id: String(c.id), name: String(c.name), email: emailOf(c), reading: r, eligible: !!emailOf(c),
-        detail: 'Test from ' + fmt_(r.date, 'MMM d') + (emailOf(c) ? '' : ' · no email') };
-    }).sort((a, b) => a.name.localeCompare(b.name));
-  }
-
-  if (type === 'reminders') {
-    const today = stripTime_(new Date());
-    return readTable_(SHEETS.invoices).filter(i => i.status === 'Open' && Number(i.balance) > 0).map(i => {
-      const late = daysBetween_(i.dueDate, today);
-      const email = String(i.email || '').trim();
-      return { id: String(i.id), name: String(i.clientName), email, invoice: i, eligible: !!email,
-        detail: '#' + i.id + ' · ' + money_(i.balance) + ' · ' + (late > 0 ? late + ' days late' : 'due ' + fmt_(i.dueDate, 'MMM d')) + (email ? '' : ' · no email') };
-    }).sort((a, b) => a.name.localeCompare(b.name));
-  }
-
-  return clients.map(c => ({ id: String(c.id), name: String(c.name), email: emailOf(c), eligible: !!emailOf(c),
-    detail: emailOf(c) || 'no email' })).sort((a, b) => a.name.localeCompare(b.name));
-}
-
-/** On-demand friendly balance note. Does not touch the automatic reminder schedule. */
-function sendBalanceNote_(inv, s) {
-  const late = daysBetween_(inv.dueDate, new Date());
-  const body = '<p>Hi ' + esc_(firstName_(inv.clientName)) + ',</p>' +
-    '<p>' + (late > 0 ? 'Just a friendly note that invoice #' + inv.id + ' is past due.' : 'Just a friendly note about your open invoice.') + '</p>' +
-    summaryBox_([['Invoice', '#' + inv.id], ['Balance', money_(inv.balance)], [late > 0 ? 'Was due' : 'Due by', fmt_(inv.dueDate, 'MMM d, yyyy')]]) +
-    howToPay_(s) + '<p>If you already paid, thank you, and please ignore this.</p>' + signoff_(s);
-  sendClientEmail_(inv.email, 'Friendly reminder: Invoice #' + inv.id + ' (' + money_(inv.balance) + ')', body, s, [getInvoicePdf_(inv, s).getBlob()]);
-}
-
-/** Like sendClientEmail_ but with extra inline images (the strip photo) alongside the logo. */
-function sendClientEmailWithImages_(to, subject, innerHtml, s, images) {
-  const logo = findAsset_(LOGO_FILE_NAME);
-  const inline = Object.assign({}, images || {});
-  if (logo) inline.logo = logo;
-  MailApp.sendEmail({
-    to: to, bcc: ownerEmail_(s), replyTo: ownerEmail_(s), name: String(s.BUSINESS_NAME), subject: subject,
-    htmlBody: emailShell_(innerHtml, s, !!logo),
-    inlineImages: Object.keys(inline).length ? inline : undefined,
-  });
-}
-
-// ============================================================
 // Dashboard (the app's Dash tab)
 // Read-only. Everything is computed here so the phone only draws it.
 // Loaded on demand when the tab opens, so the rest of the app stays fast.
@@ -1180,13 +1048,31 @@ function dashboard_() {
     .filter(w => String(w.clientId) === String(clientId) && w.itemId === itemId)
     .reduce((best, w) => (!best || w.date > best ? w.date : best), null);
 
-  const weekly = clients.filter(c => c.type === 'Weekly').map(c => {
+  // Client Accounts: every active client with visit status (weekly only) and money status.
+  const unbilledBy = {}, openBy = {};
+  work.filter(w => !w.invoiceId).forEach(w => {
+    const k = String(w.clientId); unbilledBy[k] = unbilledBy[k] || { n: 0, amt: 0 };
+    unbilledBy[k].n++; unbilledBy[k].amt += Number(w.amount || 0);
+  });
+  open.forEach(i => {
+    const k = String(i.clientId); openBy[k] = openBy[k] || { n: 0, amt: 0, late: 0 };
+    openBy[k].n++; openBy[k].amt += Number(i.balance || 0);
+    if (daysBetween_(i.dueDate, today) > 0) openBy[k].late++;
+  });
+  const accounts = clients.map(c => {
+    const k = String(c.id);
+    const weeklyType = c.type === 'Weekly';
     const biweekly = /bi-?weekly/i.test(String(c.notes || ''));
-    const last = lastByClientItem(c.id, 'VISIT');
+    const last = weeklyType ? lastByClientItem(c.id, 'VISIT') : null;
     const since = last ? daysBetween_(last, today) : null;
-    const due = biweekly ? 14 : 7;
-    return { name: String(c.name), biweekly, lastVisit: last ? ymd_(last) : '', daysSince: since, overdue: since === null || since > due };
-  }).sort((a, b) => (b.daysSince === null ? 999 : b.daysSince) - (a.daysSince === null ? 999 : a.daysSince));
+    return {
+      id: k, name: String(c.name), weekly: weeklyType, biweekly, email: !!String(c.email || '').trim(),
+      lastVisit: last ? ymd_(last) : '', daysSince: since,
+      overdue: weeklyType && (since === null || since > (biweekly ? 14 : 7)),
+      unbilled: round2_((unbilledBy[k] || {}).amt || 0), unbilledCount: (unbilledBy[k] || {}).n || 0,
+      open: round2_((openBy[k] || {}).amt || 0), openCount: (openBy[k] || {}).n || 0, late: (openBy[k] || {}).late || 0,
+    };
+  }).sort((a, b) => (b.weekly - a.weekly) || a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }));
 
   const thisYear = w => w.date.getFullYear() === year;
   const openedIds = {}, closedIds = {};
@@ -1199,7 +1085,7 @@ function dashboard_() {
   const workOut = {
     visitsThisWeek: work.filter(w => w.itemId === 'VISIT' && stripTime_(w.date) >= weekAgo).length,
     jobsThisMonth: work.filter(w => w.date >= monthStart).length,
-    weekly,
+    accounts,
     openings: Object.keys(openedIds).length,
     closings: Object.keys(closedIds).length,
     clientCount: clients.length,
@@ -1267,6 +1153,62 @@ function dashboard_() {
 }
 
 // ============================================================
+// Client Accounts (Dash tab > tap a client)
+// One client's unbilled line items (Tommy picks which to bill), open invoices, and paid history.
+// ============================================================
+
+/** Returns { client, unbilled: [line items], open: [invoices], paid: [invoices] } for one client. */
+function clientAccount_(clientId) {
+  const c = findById_(SHEETS.clients, clientId);
+  if (!c) throw new Error('Client not found.');
+  const today = new Date();
+  const unbilled = readTable_(SHEETS.work)
+    .filter(w => String(w.clientId) === String(c.id) && !w.invoiceId && !toBool_(w.voided) && w.date instanceof Date)
+    .sort((a, b) => a.date - b.date)
+    .map(w => ({ id: String(w.id), date: ymd_(w.date), description: String(w.description), qty: Number(w.qty) || 1, amount: Number(w.amount) || 0 }));
+
+  const invoices = readTable_(SHEETS.invoices).filter(i => String(i.clientId) === String(c.id));
+  const lastPay = {};
+  readTable_(SHEETS.payments).forEach(p => {
+    const k = String(p.invoiceId);
+    if (p.date instanceof Date && (!lastPay[k] || p.date > lastPay[k])) lastPay[k] = p.date;
+  });
+  const open = invoices.filter(i => i.status === 'Open').map(i => invoiceToClient_(i, today))
+    .sort((a, b) => a.invoiceDate.localeCompare(b.invoiceDate));
+  const paid = invoices.filter(i => i.status === 'Paid')
+    .map(i => Object.assign(invoiceToClient_(i, today), { paidDate: lastPay[String(i.id)] ? ymd_(lastPay[String(i.id)]) : '' }))
+    .sort((a, b) => b.invoiceDate.localeCompare(a.invoiceDate)).slice(0, 12);
+
+  return {
+    client: { id: String(c.id), name: String(c.name), email: String(c.email || '').trim(), type: String(c.type) },
+    unbilled, open, paid,
+  };
+}
+
+/**
+ * p = { clientId, entryIds: [...] }. Bills only the line items Tommy checked: one invoice, emailed
+ * with the PDF if the client has an email. Anything left unchecked stays unbilled for later
+ * (including the automatic run on BILLING_DAY).
+ */
+function billSelected_(p) {
+  return withLock_(() => {
+    const s = getSettings_();
+    const client = findById_(SHEETS.clients, p && p.clientId);
+    if (!client) throw new Error('Client not found.');
+    const ids = (Array.isArray(p.entryIds) ? p.entryIds : []).map(String);
+    if (!ids.length) throw new Error('Pick at least one item to bill.');
+    const entries = readTable_(SHEETS.work).filter(w =>
+      ids.indexOf(String(w.id)) >= 0 && String(w.clientId) === String(client.id) && !w.invoiceId && !toBool_(w.voided));
+    if (entries.length !== ids.length) throw new Error('Some of those items were already billed or removed. Refresh and try again.');
+    const inv = createInvoice_(client, entries, s);
+    if (!inv) throw new Error('Nothing to bill: those items add up to $0.');
+    return Object.assign(bootstrap_(), {
+      billed: { id: String(inv.id), total: Number(inv.total), emailed: !!inv.sentAt, email: String(inv.email || '') },
+    });
+  });
+}
+
+// ============================================================
 // Invoices
 // ============================================================
 
@@ -1316,7 +1258,11 @@ function createInvoice_(client, entries, s) {
 /** Returns the saved PDF for an invoice, rebuilding it if the file is missing. */
 function getInvoicePdf_(inv, s) {
   if (inv.pdfId) {
-    try { return DriveApp.getFileById(inv.pdfId); } catch (e) { console.warn('PDF missing for #' + inv.id + ', rebuilding'); }
+    try {
+      const existing = DriveApp.getFileById(inv.pdfId);
+      shareByLink_(existing);
+      return existing;
+    } catch (e) { console.warn('PDF missing for #' + inv.id + ', rebuilding'); }
   }
   const client = findById_(SHEETS.clients, inv.clientId) || { name: inv.clientName, address: '', email: inv.email };
   const entries = readTable_(SHEETS.work)
@@ -1353,7 +1299,17 @@ function buildInvoicePdf_(inv, client, entries, s) {
   const blob = Utilities.newBlob(html, 'text/html', 'invoice.html')
     .getAs('application/pdf')
     .setName('Invoice ' + inv.id + ' - ' + inv.clientName + '.pdf');
-  return DriveApp.getFolderById(s.INVOICE_FOLDER_ID).createFile(blob);
+  const file = DriveApp.getFolderById(s.INVOICE_FOLDER_ID).createFile(blob);
+  shareByLink_(file);
+  return file;
+}
+
+/**
+ * Lets anyone with the link VIEW the file, so the app's PDF button opens on Tommy's phone and
+ * clients' devices without a Google sign-in (the link is long and unguessable).
+ */
+function shareByLink_(file) {
+  safely_('share PDF', () => file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW));
 }
 
 // ============================================================
