@@ -893,7 +893,7 @@ function resendInvoice_(invoiceId) {
     const inv = findById_(SHEETS.invoices, invoiceId);
     if (!inv) throw new Error('Invoice not found.');
     if (!String(inv.email).trim()) throw new Error('This client has no email. Add one in Settings first.');
-    sendInvoiceEmail_(inv, getInvoicePdf_(inv, s), s);
+    sendInvoiceEmail_(inv, getInvoicePdf_(inv, s, true), s);
     updateRow_(SHEETS.invoices, inv._row, { sentAt: new Date() });
     return bootstrap_();
   });
@@ -1600,8 +1600,16 @@ function invoiceLines_(entries) {
 /** money_ with a leading minus for credits: -$400.00 */
 function signedMoney_(n) { return Number(n) < 0 ? '-' + money_(Math.abs(Number(n))) : money_(n); }
 
-/** Returns the saved PDF for an invoice, rebuilding it if the file is missing. */
-function getInvoicePdf_(inv, s) {
+/**
+ * Returns the saved PDF for an invoice, rebuilding it if the file is missing.
+ * fresh = true always rebuilds (Resend and reminders), so the client sees the current design and
+ * the current paid / balance numbers. The old file goes to Drive's trash.
+ */
+function getInvoicePdf_(inv, s, fresh) {
+  if (fresh && inv.pdfId) {
+    safely_('trash old PDF #' + inv.id, () => DriveApp.getFileById(inv.pdfId).setTrashed(true));
+    inv.pdfId = '';
+  }
   if (inv.pdfId) {
     try {
       const existing = DriveApp.getFileById(inv.pdfId);
@@ -1695,7 +1703,7 @@ function sendReminderEmail_(inv, level, maxLevel, daysLate, s) {
     howToPay_(s) + '<p>If you already paid, thank you, and please ignore this.</p>' + signoff_(s);
   const subject = (isFinal ? 'Final reminder' : level === 1 ? 'Reminder' : 'Second reminder') +
     ': Invoice #' + inv.id + ' (' + money_(inv.balance) + ')';
-  sendClientEmail_(inv.email, subject, body, s, [getInvoicePdf_(inv, s).getBlob()]);
+  sendClientEmail_(inv.email, subject, body, s, [getInvoicePdf_(inv, s, true).getBlob()]);
 }
 
 function sendReceiptEmail_(inv, payment, balanceAfter, s) {
