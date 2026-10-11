@@ -1741,6 +1741,7 @@ function sendInvoiceEmail_(inv, pdf, s) {
       note ? emailBox_('', '<span style="font-family:Georgia,serif;font-style:italic;font-size:16px">' + esc_(note).replace(/\n/g, '<br>') + '</span>', E.gold) : '',
       emailList_('WHAT\u2019S ON IT', rows, ['TOTAL DUE', money_(inv.balance)]),
       payBox_(inv, s),
+      poolFactBox_(),
     ],
     signoff: signoff_(s),
     footerNote: contactsNote_(s),
@@ -1790,11 +1791,34 @@ function sendReceiptEmail_(inv, payment, balanceAfter, s) {
         ['Invoice #' + inv.id, '', money_(inv.total)],
         ['This payment', esc_(how), money_(payment.amount)],
       ], [paidUp ? 'PAID IN FULL' : 'STILL DUE', paidUp ? '&#10003;' : money_(balanceAfter)]),
+      poolFactBox_(),
     ],
     signoff: signoff_(s),
     footerNote: contactsNote_(s),
   });
   sendClientEmail_(inv.email, 'Payment received: Invoice #' + inv.id, html, s, []);
+}
+
+/**
+ * "Did you know?" for customer emails (invoice and receipt): one random pool fact each time.
+ * Every fact was checked against a source; see the git commit that added them before editing.
+ */
+const POOL_FACTS = [
+  'Hemingway\'s pool in Key West cost <b>$20,000 in 1938</b> and was the only pool within 100 miles. Legend says he tossed a penny into the wet cement, joking his wife had spent everything but his last cent. A penny is still set in the patio.',
+  'Hearst Castle\'s <b>Neptune Pool</b> holds <b>345,000 gallons</b> and was torn out and rebuilt <b>three times</b> between 1924 and 1936, each one bigger. A typical backyard pool holds 15,000 to 20,000.',
+  'The indoor <b>Roman Pool</b> at Hearst Castle is covered floor to ceiling in 1-inch glass tiles, some with <b>real gold</b> fused inside.',
+  'San Francisco\'s <b>Fleishhacker Pool</b> (1925) was <b>1,000 feet long</b> and held <b>6.5 million gallons</b> of heated seawater. Lifeguards patrolled it in <b>rowboats</b>.',
+  'FDR got a White House pool in 1933, paid for by a <b>New York Daily News</b> fundraiser. In 1970 it was covered over. The White House press briefing room sits on top of it today.',
+  'President Ford\'s outdoor White House pool (1975) was paid for entirely by <b>private donations</b>, capped at <b>$1,000</b> each.',
+  'David Hockney painted the bottom of the <b>Hollywood Roosevelt</b> hotel pool in 1988 in about <b>four hours</b>, with a small brush on a broom handle. Guests still swim over it.',
+  'The <b>Biltmore</b> mansion in Asheville has a <b>70,000-gallon</b> indoor pool, built for George Vanderbilt\'s house in the 1890s.',
+  'America\'s first public pool, Boston\'s <b>Cabot Street Bath</b>, opened in <b>1868</b>. It was meant for working men to get clean, but about 97% of the swimmers were kids.',
+  'The <b>kidney-shaped pool</b> took off after landscape architect Thomas Church built one at a Sonoma ranch in <b>1948</b>. It became the shape of the 1950s.',
+  '<b>Pro tip:</b> that strong "chlorine smell" is usually <b>chloramines</b>, used-up chlorine. A smelly pool needs <b>more</b> chlorine (shock it), not less.',
+];
+
+function poolFactBox_() {
+  return emailBox_('DID YOU KNOW?', POOL_FACTS[Math.floor(Math.random() * POOL_FACTS.length)], EMAIL_COLORS.aqua);
 }
 
 /** How-to-pay box for client emails. */

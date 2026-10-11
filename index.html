@@ -148,10 +148,6 @@
   .nudge .actions { margin-top: 8px; }
   .intro { margin: 2px 4px 14px; padding-left: 12px; border-left: 3px solid var(--gold); color: var(--muted); font-size: 14px; line-height: 1.45; }
   .intro b { color: var(--ink); }
-  .fact { margin-top: 22px; border: 1px dashed rgba(41,182,232,.4); background: rgba(41,182,232,.06); }
-  .fact .k { font-family: var(--display); font-size: 12px; letter-spacing: 2.4px; color: #29b6e8; margin-bottom: 6px; }
-  .fact .t { font-size: 14.5px; line-height: 1.5; color: var(--ink); }
-  .fact .more { margin-top: 10px; background: transparent; border: 0; color: #29b6e8; font-weight: 800; font-size: 13px; padding: 0; cursor: pointer; }
   .pick .x { background: transparent; border: 0; color: var(--red); font-size: 18px; font-weight: 800; padding: 4px 2px 4px 10px; cursor: pointer; }
   .badge.hand { background: rgba(227,189,106,.14); color: var(--gold); }
   .actions { display: flex; gap: 8px; margin-top: 11px; flex-wrap: wrap; }
@@ -574,8 +570,7 @@
             ${j.billed !== 'all' ? `<div><button class="btn danger sm" style="margin-top:6px" onclick="voidJob(${i})">Remove</button></div>` : ''}
           </div>
         </div>`).join('') : '<div class="empty">Nothing logged yet.</div>'}
-      </div>
-      ${factCard()}`;
+      </div>`;
   }
 
   /** Placeholder for the service notes box: what is worth tracking week to week. */
@@ -698,29 +693,6 @@
     settings: '<b>Set it once and forget it.</b> Your prices, your customers, and your business info.',
   };
   const intro = tab => `<div class="intro">${INTROS[tab]}</div>`;
-
-  // ----- Did you know: one random pool fact per visit (all checked against the sources in the commit) -----
-  const FACTS = [
-    'Hemingway\'s pool in Key West cost <b>$20,000 in 1938</b> and was the only pool within 100 miles. Legend says he tossed a penny into the wet cement, joking his wife had spent everything but his last cent. A penny is still set in the patio.',
-    'Hearst Castle\'s <b>Neptune Pool</b> holds <b>345,000 gallons</b> and was torn out and rebuilt <b>three times</b> between 1924 and 1936, each one bigger. A typical backyard pool holds 15,000 to 20,000.',
-    'The indoor <b>Roman Pool</b> at Hearst Castle is covered floor to ceiling in 1-inch glass tiles, some with <b>real gold</b> fused inside.',
-    'San Francisco\'s <b>Fleishhacker Pool</b> (1925) was <b>1,000 feet long</b> and held <b>6.5 million gallons</b> of heated seawater. Lifeguards patrolled it in <b>rowboats</b>.',
-    'FDR got a White House pool in 1933, paid for by a <b>New York Daily News</b> fundraiser. In 1970 it was covered over. The White House press briefing room sits on top of it today.',
-    'President Ford\'s outdoor White House pool (1975) was paid for entirely by <b>private donations</b>, capped at <b>$1,000</b> each.',
-    'David Hockney painted the bottom of the <b>Hollywood Roosevelt</b> hotel pool in 1988 in about <b>four hours</b>, with a small brush on a broom handle. Guests still swim over it.',
-    'The <b>Biltmore</b> mansion in Asheville has a <b>70,000-gallon</b> indoor pool, built for George Vanderbilt\'s house in the 1890s.',
-    'America\'s first public pool, Boston\'s <b>Cabot Street Bath</b>, opened in <b>1868</b>. It was meant for working men to get clean, but about 97% of the swimmers were kids.',
-    'The <b>kidney-shaped pool</b> took off after landscape architect Thomas Church built one at a Sonoma ranch in <b>1948</b>. It became the shape of the 1950s.',
-    '<b>Pro tip:</b> that strong "chlorine smell" is usually <b>chloramines</b>, used-up chlorine. A smelly pool needs <b>more</b> chlorine (shock it), not less.',
-  ];
-  let factIdx = Math.floor(Math.random() * FACTS.length);
-  const factCard = () => `
-    <div class="card fact"><div class="k">DID YOU KNOW?</div><div class="t" id="factText">${FACTS[factIdx]}</div>
-      <button class="more" onclick="nextFact()">Another one &rsaquo;</button></div>`;
-  function nextFact() {
-    factIdx = (factIdx + 1) % FACTS.length;
-    document.querySelectorAll('#factText').forEach(el => { el.innerHTML = FACTS[factIdx]; });
-  }
 
   // ----- Heads up cards on the Log tab -----
   /**
@@ -1228,8 +1200,7 @@
         <div><span>Daily job</span>${sy.lastDailyRun ? esc(sy.lastDailyRun) : 'Not run yet'}</div>
         <div><span>Emails this month</span>${plural(sy.invoicesEmailed, 'invoice')} &middot; ${plural(sy.receiptsEmailed, 'receipt')} &middot; ${plural(sy.reportsEmailed, 'report')}</div>
         <div><span>Strip reader</span>${sy.stripReader ? `${sy.stripReads} read${sy.stripReads === 1 ? '' : 's'} &middot; ~$${sy.stripCost.toFixed(sy.stripCost < 0.01 ? 4 : 2)}` : 'Off'}</div>
-      </div></div>
-      ${factCard()}`;
+      </div></div>`;
   }
 
   // ----- Client Accounts (Dash) -----
