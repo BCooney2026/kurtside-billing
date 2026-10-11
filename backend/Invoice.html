@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<!--
+  Kurtside Pool Co. invoice layout.
+  Rendered by buildInvoicePdf_() in Code.gs and converted to PDF.
+  The PDF converter has limited CSS support: tables for layout, no flexbox/grid.
+  Everything it needs arrives in the `data` object.
+-->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { font-family: Arial, Helvetica, sans-serif; color: #0b1f33; font-size: 10.5pt; margin: 0; }
+  table { border-collapse: collapse; width: 100%; }
+  .bar { height: 8px; background: #29b6e8; }
+  .gold { height: 3px; background: #d4a64a; }
+  .wrap { padding: 26px 34px 20px; }
+  .title { font-size: 28pt; font-weight: bold; letter-spacing: 3px; text-align: right; margin: 0 0 8px; }
+  .meta td { padding: 2px 0; font-size: 10pt; }
+  .meta .k { color: #5b6b7b; text-align: right; padding-right: 12px; }
+  .meta .v { text-align: right; font-weight: bold; width: 110px; }
+  .label { font-size: 8pt; letter-spacing: 1.5px; text-transform: uppercase; color: #5b6b7b; margin-bottom: 3px; }
+  .party { font-size: 10.5pt; line-height: 1.4; }
+  .lines th { background: #0b1f33; color: #ffffff; font-size: 8.5pt; letter-spacing: 1px; text-transform: uppercase; padding: 8px; text-align: left; }
+  .lines td { padding: 8px; border-bottom: 1px solid #dde3ea; vertical-align: top; }
+  .lines tr.alt td { background: #f6f8fb; }
+  .num { text-align: right; }
+  .note { color: #5b6b7b; font-size: 9pt; }
+  .totals td { padding: 5px 8px; }
+  .totals .k { text-align: right; color: #5b6b7b; }
+  .totals .v { text-align: right; width: 110px; }
+  .due td { background: #0b1f33; color: #ffffff; font-weight: bold; font-size: 12.5pt; padding: 9px 8px; }
+  .due .v { color: #d4a64a; }
+  .pay { margin-top: 22px; background: #f3f6f9; border-left: 4px solid #d4a64a; padding: 12px 14px; font-size: 10pt; line-height: 1.5; }
+  .thanks { text-align: center; margin-top: 26px; font-size: 11pt; font-weight: bold; }
+  .foot { text-align: center; color: #5b6b7b; font-size: 8.5pt; margin-top: 4px; }
+</style>
+</head>
+<body>
+<div class="bar"></div>
+<div class="gold"></div>
+<div class="wrap">
+
+  <table>
+    <tr>
+      <td style="width:55%; vertical-align:top;">
+        <? if (data.logo) { ?>
+          <img src="<?!= data.logo ?>" style="width:175px; height:auto;">
+        <? } else { ?>
+          <div style="font-size:22pt; font-weight:bold;"><?= data.biz.name ?></div>
+        <? } ?>
+      </td>
+      <td style="vertical-align:top;">
+        <div class="title">INVOICE</div>
+        <table class="meta">
+          <tr><td class="k">Invoice #</td><td class="v"><?= data.number ?></td></tr>
+          <tr><td class="k">Date</td><td class="v"><?= data.invoiceDate ?></td></tr>
+          <tr><td class="k">Terms</td><td class="v"><?= data.terms ?></td></tr>
+          <tr><td class="k">Due</td><td class="v"><?= data.dueDate ?></td></tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+
+  <table style="margin-top:22px;">
+    <tr>
+      <td style="width:55%; vertical-align:top;">
+        <div class="label">Bill to</div>
+        <div class="party">
+          <b><?= data.client.name ?></b><br>
+          <? if (data.client.address) { ?><?= data.client.address ?><br><? } ?>
+          <? if (data.client.email) { ?><?= data.client.email ?><? } ?>
+        </div>
+      </td>
+      <td style="vertical-align:top;">
+        <div class="label">From</div>
+        <div class="party">
+          <b><?= data.biz.name ?></b><br>
+          <?= data.biz.owner ?><br>
+          <? if (data.biz.phone) { ?><?= data.biz.phone ?><br><? } ?>
+          <?= data.biz.email ?>
+        </div>
+      </td>
+    </tr>
+  </table>
+
+  <table class="lines" style="margin-top:22px;">
+    <tr>
+      <th style="width:70px;">Date</th>
+      <th>Description</th>
+      <th class="num" style="width:40px;">Qty</th>
+      <th class="num" style="width:80px;">Rate</th>
+      <th class="num" style="width:90px;">Amount</th>
+    </tr>
+    <? data.lines.forEach(function (line, i) { ?>
+      <tr class="<?= i % 2 ? 'alt' : '' ?>">
+        <td><?= line.date ?></td>
+        <td>
+          <?= line.description ?>
+          <? if (line.note) { ?><br><span class="note"><?= line.note ?></span><? } ?>
+        </td>
+        <td class="num"><?= line.qty ?></td>
+        <td class="num"><?= line.rate ?></td>
+        <td class="num"><?= line.amount ?></td>
+      </tr>
+    <? }); ?>
+  </table>
+
+  <table class="totals" style="margin-top:8px;">
+    <tr><td class="k">Total</td><td class="v"><?= data.total ?></td></tr>
+    <? if (data.paid) { ?>
+      <tr><td class="k">Paid</td><td class="v">-<?= data.paid ?></td></tr>
+    <? } ?>
+  </table>
+  <table class="due">
+    <tr><td style="text-align:right;">Balance due by <?= data.dueDate ?></td><td class="v" style="text-align:right; width:110px;"><?= data.balance ?></td></tr>
+  </table>
+
+  <div class="pay">
+    <b>How to pay:</b> cash or check.<br>
+    Make checks payable to <b><?= data.biz.payableTo ?></b>.
+    <? if (data.biz.mailTo) { ?><br>Mail to: <?= data.biz.mailTo ?><? } ?>
+    <br>Or hand payment to <?= data.biz.owner ?> on the next visit. Please write the invoice # on your check.
+  </div>
+
+  <div class="thanks">Thank you for your business.</div>
+  <div class="foot"><?= data.biz.name ?> &nbsp;&bull;&nbsp; Maintenance &nbsp;&bull;&nbsp; Openings &nbsp;&bull;&nbsp; Closings</div>
+
+</div>
+</body>
+</html>
