@@ -15,7 +15,7 @@
   table { border-collapse: collapse; width: 100%; }
   .serif { font-family: Georgia, 'Times New Roman', serif; }
 
-  .head { background: #06111d; text-align: center; padding: 10px 0 8px; }
+  .head { text-align: center; padding: 8px 0 6px; }
 
   .wrap { padding: 16px 40px 8px; }
   .kicker { font-size: 7.5pt; letter-spacing: 2.5px; text-transform: uppercase; color: #8a97a6; }
@@ -25,12 +25,12 @@
   .meta .k { color: #8a97a6; text-align: right; padding-right: 12px; }
   .meta .v { text-align: right; font-weight: bold; width: 105px; }
 
-  .due-box { background: #0b1f33; color: #ffffff; }
+  .due-box { border: 2px solid #0b1f33; border-left: 8px solid #c9a24e; }
   .due-box td { padding: 11px 18px; vertical-align: middle; }
-  .due-box .lbl { font-size: 7.5pt; letter-spacing: 2.5px; color: #8fa4b9; }
-  .due-box .amt { font-size: 26pt; font-weight: bold; color: #e3bd6a; line-height: 1.1; }
-  .due-box .by { font-size: 10pt; color: #ffffff; text-align: right; }
-  .due-box .by b { color: #e3bd6a; }
+  .due-box .lbl { font-size: 7.5pt; letter-spacing: 2.5px; color: #8a97a6; }
+  .due-box .amt { font-size: 26pt; font-weight: bold; color: #0b1f33; line-height: 1.1; }
+  .due-box .by { font-size: 10pt; color: #0b1f33; text-align: right; }
+  .due-box .by b { color: #0b1f33; font-size: 12pt; }
 
   .party { font-size: 10pt; line-height: 1.45; }
   .party b { font-size: 11pt; }
@@ -61,17 +61,17 @@
 </head>
 <body>
 
-<!-- Dark bands use table cells with bgcolor: Google's PDF converter drops background colors on divs. -->
+<!-- Google's PDF converter drops background colors (even bgcolor), so this layout is white with
+     colored BORDERS only, which it keeps. Also prints cleanly on home printers. -->
 <table>
-  <tr><td class="head" bgcolor="#06111d" align="center">
+  <tr><td class="head" align="center">
     <? if (data.logo) { ?>
       <img src="<?!= data.logo ?>" style="width:240px; height:auto;">
     <? } else { ?>
       <div class="serif" style="font-size:26pt; font-weight:bold; color:#e3bd6a; letter-spacing:2px; padding:10px 0;"><?= data.biz.name ?></div>
     <? } ?>
   </td></tr>
-  <tr><td bgcolor="#c9a24e" style="height:4px; font-size:0; line-height:0;">&nbsp;</td></tr>
-  <tr><td bgcolor="#29b6e8" style="height:3px; font-size:0; line-height:0;">&nbsp;</td></tr>
+  <tr><td style="border-top:4px solid #c9a24e; border-bottom:3px solid #29b6e8; height:0; font-size:0; line-height:0;"></td></tr>
 </table>
 
 <div class="wrap">
@@ -92,13 +92,13 @@
     </tr>
   </table>
 
-  <table class="due-box" bgcolor="#0b1f33" style="margin-top:14px;">
+  <table class="due-box" style="margin-top:14px;">
     <tr>
-      <td bgcolor="#0b1f33">
+      <td>
         <div class="lbl">AMOUNT DUE</div>
         <div class="amt serif"><?= data.balance ?></div>
       </td>
-      <td class="by" bgcolor="#0b1f33">Please pay by<br><b><?= data.dueDate ?></b></td>
+      <td class="by">Please pay by<br><b><?= data.dueDate ?></b></td>
     </tr>
   </table>
 
@@ -170,7 +170,7 @@
     <div class="msg"><?= data.message ?></div>
   <? } ?>
 
-  <table class="pay" bgcolor="#f3f6f9" style="margin-top:14px; background:#f3f6f9;">
+  <table class="pay" style="margin-top:14px; border:1px solid #e3e8ee;">
     <tr>
       <td style="width:50%; border-left:4px solid #29b6e8;">
         <div class="h">How to pay</div>
