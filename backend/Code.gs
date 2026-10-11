@@ -49,7 +49,9 @@
  *   PREVIEW_DAY   Tommy gets "here is what bills on the 1st"
  *   BILLING_DAY   Every client with unbilled work dated before this
  *                 month gets one invoice, emailed with a PDF
- *   Every day     Overdue reminders at REMINDER_DAYS past due
+ *   Every day     Overdue reminders to clients at REMINDER_DAYS past due (14, 30).
+ *                 Before the first one, the app asks Tommy "Did these pay you?" so a
+ *                 client who paid cash is never nagged.
  *   Mondays       Weekly money digest to Tommy
  *
  * All settings live on the Settings tab (most are also editable
@@ -125,7 +127,7 @@ const DEFAULT_SETTINGS = [
   ['TERMS_DAYS', '15', 'Invoice is due this many days after it is sent'],
   ['PREVIEW_DAY', '28', 'Day of month Tommy gets the preview email (must be later in the month than BILLING_DAY)'],
   ['BILLING_DAY', '1', 'Day of month invoices are created and emailed (1 to 28)'],
-  ['REMINDER_DAYS', '3,14,30', 'Reminder emails go out this many days past due'],
+  ['REMINDER_DAYS', '14,30', 'Reminder emails go to clients this many days past due. Tommy sees late invoices in the app first'],
   ['AUTOMATION_PAUSED', 'FALSE', 'TRUE stops invoices and reminders. Previews and digests still go to Tommy'],
   ['INVOICE_FOLDER_ID', '', 'Set by setup(). Drive folder that holds invoice PDFs'],
   ['NEXT_INVOICE_NUMBER', '1001', 'Next invoice number. Never lower it'],
@@ -168,6 +170,19 @@ function updatePricesOnce_() {
   });
   props.setProperty(PRICE_UPDATE_KEY, new Date().toISOString());
   console.log('Price list updated: Backwash $30 and Water Line $50 added, Extra Pump $50, Pool Closing $300.');
+}
+
+/**
+ * One-time switch from client reminders at 3,14,30 days to 14,30 (Oct 2026). The first nudge now goes
+ * to Tommy in the app ("Did these pay you?"), so a client who paid cash he forgot to record is not
+ * emailed a late notice. Only changes the old default; a value Tommy set himself is left alone.
+ */
+const REMINDER_UPDATE_KEY = 'REMINDER_UPDATE_2026_10';
+function updateRemindersOnce_() {
+  const props = PropertiesService.getScriptProperties();
+  if (props.getProperty(REMINDER_UPDATE_KEY)) return;
+  if (String(getSettings_().REMINDER_DAYS).replace(/\s/g, '') === '3,14,30') setSetting_('REMINDER_DAYS', '14,30');
+  props.setProperty(REMINDER_UPDATE_KEY, new Date().toISOString());
 }
 
 /**
@@ -348,6 +363,7 @@ function runBilling() {
 
 /** Sends the next reminder level for any open, emailed invoice that has crossed a REMINDER_DAYS threshold. */
 function runReminders() {
+  updateRemindersOnce_();
   const s = getSettings_();
   const levels = reminderLevels_(s);
   const today = new Date();
@@ -448,7 +464,7 @@ function api(pin, action, payload) {
     recordPayment: recordPayment_, resendInvoice: resendInvoice_,
     saveClient: saveClient_, savePrice: savePrice_, saveSettings: saveSettings_,
     readStrip: readStrip_, saveReading: saveReading_, dashboard: dashboard_,
-    clientAccount: clientAccount_, billSelected: billSelected_,
+    clientAccount: clientAccount_, billSelected: billSelected_, approveBilling: approveBilling_,
   };
   const handler = handlers[action];
   if (!handler) throw new Error('Unknown action: ' + action);
@@ -474,6 +490,7 @@ function checkPin_(pin) {
 // ============================================================
 
 function bootstrap_() {
+  updateRemindersOnce_();
   const s = getSettings_();
   const today = new Date();
   const work = readTable_(SHEETS.work);
@@ -507,6 +524,8 @@ function bootstrap_() {
     targets: TARGETS,
     readings: readingsByClient_(12),
     stripReader: !!PropertiesService.getScriptProperties().getProperty(PROP_API_KEY),
+    reminderDays: reminderLevels_(s),
+    billingCheck: billingCheck_(s, work),
   };
 }
 
@@ -552,6 +571,55 @@ const OTHER_STARTERS = [
  *   [{ ids, date, clientName, items: 'Weekly Service Visit, Backwash...', amount, note, billed, invoiceIds }]
  * billed: 'all' | 'some' | ''. Remove only ever voids the unbilled lines of a job.
  */
+const PROP_BILL_OK = 'BILLING_CHECKED';   // { period: 'yyyy-MM', total } once Tommy taps "Looks good"
+
+/**
+ * The in-app version of the preview email: from PREVIEW_DAY until bills go out, the Log tab shows
+ * who bills on the next BILLING_DAY and for how much. Same rules as runBilling: unbilled work dated
+ * before the 1st of next month, one invoice per client, nothing when credits cover it. Returns null
+ * outside that window. "Looks good" only hides the banner; bills go out either way.
+ */
+function billingCheck_(s, work) {
+  const now = new Date();
+  if (now.getDate() < (Number(s.PREVIEW_DAY) || 28)) return null;
+  const cutoff = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const billDate = nextDayOfMonth_(Number(s.BILLING_DAY) || 1);
+  const emails = {};
+  readTable_(SHEETS.clients).forEach(c => { emails[String(c.id)] = String(c.email || '').trim(); });
+  const groups = {};
+  work.forEach(w => {
+    if (w.invoiceId || toBool_(w.voided) || !(w.date instanceof Date) || w.date >= cutoff) return;
+    const k = String(w.clientId);
+    const g = groups[k] = groups[k] || { id: k, name: String(w.clientName), total: 0, count: 0 };
+    g.total += Number(w.amount) || 0;
+    g.count += 1;
+  });
+  const clients = Object.keys(groups).map(k => groups[k])
+    .map(g => ({ id: g.id, name: g.name, total: round2_(g.total), count: g.count, noEmail: !emails[g.id] }))
+    .filter(g => g.total > 0)
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const total = round2_(clients.reduce((t, c) => t + c.total, 0));
+  const period = fmt_(billDate, 'yyyy-MM');
+  let ok = null;
+  try { ok = JSON.parse(PropertiesService.getScriptProperties().getProperty(PROP_BILL_OK) || 'null'); } catch (e) { ok = null; }
+  return {
+    billDate: ymd_(billDate), clients, total,
+    // Checked only for this billing period and this exact total: logging more work brings the banner back.
+    checked: !!(ok && ok.period === period && Number(ok.total) === total),
+    paused: toBool_(s.AUTOMATION_PAUSED),
+  };
+}
+
+/** "Looks good" on the billing check. Remembers the period and total, nothing else. */
+function approveBilling_() {
+  const check = billingCheck_(getSettings_(), readTable_(SHEETS.work));
+  if (check) {
+    PropertiesService.getScriptProperties().setProperty(PROP_BILL_OK,
+      JSON.stringify({ period: check.billDate.slice(0, 7), total: check.total }));
+  }
+  return bootstrap_();
+}
+
 function recentJobs_(work, n, invoices) {
   const invById = {};
   (invoices || []).forEach(i => { invById[i.id] = i; });
@@ -1739,7 +1807,7 @@ function dataUri_(blob) {
 }
 
 function reminderLevels_(s) {
-  return String(s.REMINDER_DAYS || '3,14,30').split(/[\s,]+/)
+  return String(s.REMINDER_DAYS || '14,30').split(/[\s,]+/)
     .map(n => parseInt(n, 10)).filter(n => n >= 0).sort((a, b) => a - b);
 }
 

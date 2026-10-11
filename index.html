@@ -140,6 +140,13 @@
   .badge { display: inline-block; font-size: 11px; font-weight: 800; padding: 3px 9px; border-radius: 999px; background: rgba(255,255,255,.07); color: var(--muted); margin-top: 4px; }
   .badge.late { background: rgba(255,107,107,.14); color: #ffa3a3; }
   .badge.ok { background: rgba(76,214,154,.14); color: var(--green); }
+  .card.heads { margin-top: 14px; padding: 16px 18px; border: 1px solid rgba(227,189,106,.45); }
+  .card.heads.red { border-color: rgba(255,107,107,.45); }
+  .heads h4 { margin: 0 0 4px; font-family: var(--display); font-size: 17px; color: var(--gold); letter-spacing: .5px; }
+  .heads.red h4 { color: #ffa3a3; }
+  .heads .item { padding: 12px 0; }
+  .heads .actions { margin-top: 8px; }
+  .pick .x { background: transparent; border: 0; color: var(--red); font-size: 18px; font-weight: 800; padding: 4px 2px 4px 10px; cursor: pointer; }
   .badge.hand { background: rgba(227,189,106,.14); color: var(--gold); }
   .actions { display: flex; gap: 8px; margin-top: 11px; flex-wrap: wrap; }
 
@@ -487,6 +494,8 @@
           <div class="when">${niceDate(d.nextBilling)}</div>
         </div>
       </div>
+      ${billingCheckCard()}
+      ${lateCard()}
 
       <div class="lbl">Who</div>
       ${anyClients ? `
@@ -670,6 +679,99 @@
       S.clientId = ''; S.items = {}; S.custom = null; S.credit = null; S.note = '';
       renderLog();
     }
+  }
+
+  // ----- Heads up cards on the Log tab -----
+  /**
+   * From the 28th until bills go out: who bills on the 1st and for how much, right where Tommy logs.
+   * "Looks good" just hides it (bills go out either way); logging more work brings it back.
+   */
+  function billingCheckCard() {
+    const b = S.data.billingCheck;
+    if (!b || !b.clients.length) return '';
+    const n = b.clients.length;
+    if (b.checked) return `<div class="muted" style="margin:12px 4px 0">&#10003; You checked the ${niceDate(b.billDate)} bills (${money(b.total)}). <a href="#" onclick="showBills(); return false" style="color:var(--gold)">Look again</a></div>`;
+    return `
+      <div class="card heads">
+        <h4>Bills go out ${niceDate(b.billDate)}</h4>
+        <div class="muted">${n} client${n === 1 ? '' : 's'} &middot; <b style="color:var(--ink)">${money(b.total)}</b>. Give it a quick look before it sends.</div>
+        ${b.paused ? '<div style="color:#ffa3a3;margin-top:6px">Automation is paused, so nothing will send until you turn it back on in Settings.</div>' : ''}
+        <div class="row" style="margin-top:12px">
+          <button class="btn ghost grow" onclick="showBills()">Show me</button>
+          <button class="btn gold grow" onclick="approveBills()">Looks good</button>
+        </div>
+      </div>`;
+  }
+
+  function showBills() {
+    const b = S.data.billingCheck;
+    openSheet(`
+      <h3>Going out ${niceDate(b.billDate)}</h3>
+      <div class="muted" style="margin:-6px 0 12px">Tap a client to see every line. Fix anything wrong there.</div>
+      <div class="card list">
+        ${b.clients.map(c => `
+          <div class="item row acct" onclick="closeSheet(); openAccount('${esc(c.id)}')">
+            <div class="grow"><div style="font-weight:800">${esc(c.name)}</div>
+              <div class="muted">${c.count} item${c.count === 1 ? '' : 's'}${c.noEmail ? ' &middot; <span style="color:var(--gold)">No email: hand it over</span>' : ''}</div></div>
+            <div class="amt">${money(c.total)}</div><span class="chev">&rsaquo;</span>
+          </div>`).join('')}
+        <div class="item row"><div class="grow" style="font-weight:800">Total</div><div class="amt" style="font-weight:800">${money(b.total)}</div></div>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <button class="btn ghost grow" onclick="closeSheet()">Close</button>
+        ${b.checked ? '' : '<button class="btn gold grow" onclick="closeSheet(); approveBills()">Looks good</button>'}
+      </div>`);
+  }
+
+  function approveBills() {
+    run('approveBilling', null, 'Got it. They go out ' + niceDate(S.data.billingCheck.billDate) + '.');
+  }
+
+  // "Not yet" hides a late invoice on this phone for a week. Browser storage can be missing, so it is optional.
+  const SNOOZE_KEY = 'kp_late_snooze';
+  function snoozes() { try { return JSON.parse(localStorage.getItem(SNOOZE_KEY) || '{}'); } catch (e) { return {}; } }
+  function notYet(id) {
+    const all = snoozes();
+    const d = new Date(); d.setDate(d.getDate() + 7);
+    all[id] = d.toISOString().slice(0, 10);
+    try { localStorage.setItem(SNOOZE_KEY, JSON.stringify(all)); } catch (e) { /* no storage: it just stays visible */ }
+    renderLog();
+  }
+
+  /** When the next reminder email reaches this client, in plain words. */
+  function reminderText(i) {
+    if (!i.email) return 'No email on file, so the app cannot remind them. You will have to ask.';
+    const next = S.data.reminderDays[i.reminderLevel || 0];
+    if (next === undefined) return 'All reminder emails have gone out.';
+    const days = next - i.daysLate;
+    return days > 1 ? `They get a reminder email in ${days} days.` : 'They get a reminder email tomorrow morning.';
+  }
+
+  /**
+   * Late invoices, asked of Tommy before any client gets a late email: if he forgot to tap
+   * Got paid on a cash or check payment, this is where he catches it.
+   */
+  function lateCard() {
+    const snoozed = snoozes(), today = S.data.today;
+    const late = S.data.openInvoices.filter(i => i.daysLate > 0 && !(snoozed[i.id] && snoozed[i.id] > today))
+      .sort((a, b) => b.daysLate - a.daysLate);
+    if (!late.length) return '';
+    return `
+      <div class="card heads red list">
+        <h4>Did these pay you?</h4>
+        <div class="muted">Late on paper. If they paid you, tap Got paid so they are not sent a reminder.</div>
+        ${late.map(i => `
+          <div class="item">
+            <div class="row"><div class="grow"><div style="font-weight:800">${esc(i.clientName)}</div>
+              <div class="muted">#${esc(i.id)} &middot; ${i.daysLate} day${i.daysLate === 1 ? '' : 's'} late</div></div>
+              <div style="text-align:right"><div class="amt">${money(i.balance)}</div>${i.paid ? '<span class="badge hand">Part paid</span>' : ''}</div></div>
+            <div class="muted" style="font-size:13px;margin-top:4px">${reminderText(i)}</div>
+            <div class="actions">
+              <button class="btn gold sm" onclick="openPay('${esc(i.id)}')">Got paid</button>
+              <button class="btn ghost sm" onclick="notYet('${esc(i.id)}')">Not yet</button>
+            </div>
+          </div>`).join('')}
+      </div>`;
   }
 
   /** Paid / part paid / billed badge for a Recent job that is on at least one invoice. */
@@ -1094,6 +1196,7 @@
             <input type="checkbox" value="${esc(u.id)}" data-amt="${u.amount}" checked onchange="updateBillBtn()">
             <div class="grow"><div style="font-weight:700">${esc(u.description)}${u.qty > 1 ? ' x' + u.qty : ''}</div><div class="muted">${niceDate(u.date)}</div></div>
             <div class="amt">${money(u.amount)}</div>
+            <button class="x" title="Remove" onclick="event.preventDefault(); event.stopPropagation(); removeLine('${esc(u.id)}', '${esc(u.description).replace(/'/g, '&#39;')}')">&#10005;</button>
           </label>`).join('') : '<div class="empty">Nothing waiting to be billed.</div>'}
       </div>
       ${A.unbilled.length ? `<label class="field" style="margin-top:12px"><span>Note on the invoice (optional)</span>
@@ -1125,6 +1228,16 @@
       </div>
       <button class="btn ghost big" onclick="closeSheet()">Close</button>`);
     updateBillBtn();
+  }
+
+  /** Removes one unbilled line (a mistake caught on the billing check) and reopens the account. */
+  async function removeLine(id, what) {
+    if (!confirm(`Remove "${what}"? It will not be billed.`)) return;
+    const clientId = S.acct.client.id;
+    if (await run('voidWork', [id], 'Removed')) {
+      openAccount(clientId);
+      if (S.tab === 'dash') loadDash();
+    }
   }
 
   function checkedItems() { return [...document.querySelectorAll('#sheet .pick input:checked')]; }
