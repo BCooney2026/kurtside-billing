@@ -1081,6 +1081,7 @@ function dashboard_() {
     if (w.itemId === 'CLOSING') closedIds[String(w.clientId)] = true;
   });
   const closingsLeft = clients.filter(c => !closedIds[String(c.id)]).map(c => String(c.name)).sort();
+  accounts.forEach(a => { a.opened = !!openedIds[a.id]; a.closed = !!closedIds[a.id]; });
 
   const workOut = {
     visitsThisWeek: work.filter(w => w.itemId === 'VISIT' && stripTime_(w.date) >= weekAgo).length,

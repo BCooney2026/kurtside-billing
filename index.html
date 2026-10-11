@@ -255,6 +255,13 @@
   .acct { cursor: pointer; }
   .acct:active { background: rgba(255,255,255,.03); }
   .acct .chev { color: var(--gold); font-size: 20px; margin-left: 4px; }
+  details.season { margin-top: 10px; }
+  details.season > summary { list-style: none; cursor: pointer; }
+  details.season > summary::-webkit-details-marker { display: none; }
+  details.season > summary .chev { transition: transform .2s; display: inline-block; color: var(--gold); font-size: 20px; }
+  details.season[open] > summary .chev { transform: rotate(90deg); }
+  .oc { font-size: 11px; font-weight: 800; padding: 3px 8px; border-radius: 999px; background: rgba(255,255,255,.06); color: var(--muted); margin-left: 4px; white-space: nowrap; }
+  .oc.yes { background: rgba(76,214,154,.14); color: var(--green); }
   .sec { font-family: var(--display); font-size: 12px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; color: var(--gold); margin: 18px 2px 8px; }
   .pick { display: flex; align-items: flex-start; gap: 12px; padding: 12px 2px; border-bottom: 1px solid var(--line-soft); cursor: pointer; }
   .pick:last-child { border-bottom: 0; }
@@ -873,6 +880,9 @@
     const hi = (hr < 12 ? 'Morning' : hr < 17 ? 'Afternoon' : 'Evening') + (D.owner ? ', ' + esc(D.owner) : '');
     const heads = headsUp(D);
     const maxTop = Math.max(1, ...m.topClients.map(c => c.amount));
+    // Client Accounts keeps to weekly pools plus anyone with money in motion; the rest live under Openings & Closings.
+    const active = w.accounts.filter(a => a.weekly || a.unbilledCount || a.openCount);
+    const quiet = w.accounts.length - active.length;
 
     $('tab-dash').innerHTML = `
       <div class="dash-head"><div class="dash-hi">${hi}</div>
@@ -923,12 +933,23 @@
       </div>
       <div class="card list" style="margin-top:10px"><div style="font-weight:800;margin-bottom:2px">Client Accounts</div>
         <div class="muted" style="margin-bottom:4px">Tap a client to bill, record payments, or see history.</div>
-        ${w.accounts.length ? w.accounts.map(acctRow).join('') : '<div class="empty">No clients yet.</div>'}
+        ${active.length ? active.map(acctRow).join('') : '<div class="empty">No clients yet.</div>'}
+        ${quiet ? `<div class="muted" style="margin-top:8px;font-size:12px">${quiet} open/close client${quiet === 1 ? '' : 's'} with nothing to bill are under Openings &amp; Closings.</div>` : ''}
       </div>
-      <div class="card" style="margin-top:10px"><div class="ring">${closingRing(w.closings, w.clientCount)}
-        <div><div style="font-weight:800">Closings: ${w.closings} of ${w.clientCount} done</div><div class="muted">Openings this year: ${w.openings}</div></div></div>
-        ${w.closingsLeft.length ? `<details class="nums"><summary>${w.closingsLeft.length} still to close</summary><div class="muted" style="margin-top:6px;line-height:1.7">${w.closingsLeft.map(esc).join('<br>')}</div></details>` : ''}
-      </div>
+      <details class="season card">
+        <summary class="row"><div class="grow"><div style="font-weight:800">Openings &amp; Closings</div>
+          <div class="muted">Closings ${w.closings} of ${w.clientCount} &middot; Openings ${w.openings}</div></div><span class="chev">&rsaquo;</span></summary>
+        <div class="ring" style="margin:14px 0 6px">${closingRing(w.closings, w.clientCount)}
+          <div><div style="font-weight:800">${w.closingsLeft.length ? w.closingsLeft.length + ' still to close' : 'All pools closed'}</div><div class="muted">This year, all clients</div></div></div>
+        <div class="list">
+          ${[...w.accounts].sort((x, y) => x.name.localeCompare(y.name, 'en', { sensitivity: 'base' })).map(a => `
+            <div class="item row acct" onclick="openAccount('${esc(a.id)}')">
+              <div class="grow" style="font-weight:700">${esc(a.name)}</div>
+              <span class="oc ${a.opened ? 'yes' : ''}">${a.opened ? '&#10003; ' : ''}Opened</span>
+              <span class="oc ${a.closed ? 'yes' : ''}">${a.closed ? '&#10003; ' : ''}Closed</span>
+              <span class="chev" style="color:var(--gold);font-size:20px;margin-left:4px">&rsaquo;</span></div>`).join('')}
+        </div>
+      </details>
 
       <div class="lbl">System</div>
       <div class="card"><div class="sysgrid">
