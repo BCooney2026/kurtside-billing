@@ -553,9 +553,8 @@
           </div>
           <div style="text-align:right">
             <div class="amt">${money(j.amount)}</div>
-            ${j.billed === 'all'
-              ? `<span class="badge">Billed #${esc(j.invoiceIds.join(', #'))}</span>`
-              : `<button class="btn danger sm" style="margin-top:6px" onclick="voidJob(${i})">Remove</button>`}
+            ${j.invoiceIds.length ? jobBadge(j) : ''}
+            ${j.billed !== 'all' ? `<div><button class="btn danger sm" style="margin-top:6px" onclick="voidJob(${i})">Remove</button></div>` : ''}
           </div>
         </div>`).join('') : '<div class="empty">Nothing logged yet.</div>'}
       </div>`;
@@ -673,16 +672,30 @@
     }
   }
 
+  /** Paid / part paid / billed badge for a Recent job that is on at least one invoice. */
+  function jobBadge(j) {
+    const nums = '#' + esc(j.invoiceIds.join(', #'));
+    if (j.paid === 'all') return `<span class="badge ok">&#10003; Paid ${nums}</span>`;
+    if (j.paid === 'some') return `<span class="badge hand">Part paid ${nums}</span>`;
+    return `<span class="badge">Billed ${nums}</span>`;
+  }
+
   /** Tap a Recent job: every line with its price, the total, the private note, and billed status. */
   function openJob(i) {
     const j = S.data.recent[i];
     const lines = j.lines || [];
-    const status = j.billed === 'all' ? 'Billed on #' + j.invoiceIds.join(', #')
-      : j.billed === 'some' ? 'Partly billed (#' + j.invoiceIds.join(', #') + ')'
-      : 'Not billed yet. Goes on the next bill.';
+    const nums = '#' + j.invoiceIds.join(', #');
+    const status = !j.invoiceIds.length ? 'Not billed yet. Goes on the next bill.'
+      : j.paid === 'all' ? 'Paid. Invoice ' + nums
+      : j.paid === 'some' ? 'Part paid. Invoice ' + nums
+      : 'Billed on ' + nums + ', not paid yet';
+    const payBtns = (j.openInvoiceIds || []).map(id =>
+      `<button class="btn gold" style="flex:1" onclick="closeSheet(); openPay('${esc(id)}')">Got paid${j.openInvoiceIds.length > 1 ? ' #' + esc(id) : ''}</button>`).join('');
     openSheet(`
       <h3>${esc(j.clientName)}</h3>
-      <div class="muted" style="margin:-8px 0 12px">${niceDate(j.date)} &middot; ${esc(status)}</div>
+      <div class="muted" style="margin:-8px 0 8px">${niceDate(j.date)}</div>
+      <div style="margin:0 0 12px">${j.invoiceIds.length ? jobBadge(j) : '<span class="badge">Not billed yet</span>'}</div>
+      <div class="muted" style="margin:0 0 12px">${esc(status)}</div>
       <div class="card list">
         ${lines.length ? lines.map(l => `
           <div class="item row">
@@ -695,7 +708,8 @@
         </div>
       </div>
       ${j.note ? `<div class="lbl">Service notes</div><div class="card" style="white-space:pre-wrap">${esc(j.note)}</div>` : ''}
-      <div class="row" style="margin-top:14px">
+      ${payBtns ? `<div class="row" style="margin-top:14px">${payBtns}</div>` : ''}
+      <div class="row" style="margin-top:10px">
         ${j.billed !== 'all' ? `<button class="btn danger" style="flex:1" onclick="closeSheet(); voidJob(${i})">Remove</button>` : ''}
         <button class="btn" style="flex:1" onclick="closeSheet()">Close</button>
       </div>`);
@@ -1050,7 +1064,8 @@
     const visit = a.weekly ? (a.daysSince === null ? 'No visit logged yet' : 'Last visit ' + ago(a.daysSince)) : 'Openings & closings';
     const badge = a.late ? `<span class="stlabel fix">${ICON.fix} Late</span>`
       : a.unbilledCount ? '<span class="stlabel watch">To bill</span>'
-      : '<span class="stlabel none">Billed</span>';
+      : a.openCount ? '<span class="stlabel none">Billed</span>'
+      : `<span class="stlabel good">${ICON.good} Paid up</span>`;
     return `<div class="item row acct" onclick="openAccount('${esc(a.id)}')">
       <div class="grow"><div style="font-weight:700">${esc(a.name)}${a.biweekly ? ' <span class="muted">(biweekly)</span>' : ''}</div>
         <div class="muted">${visit}${money1 ? ' &middot; ' + money1 : ''}</div></div>
@@ -1092,7 +1107,7 @@
           <div class="item">
             <div class="row"><div class="grow"><div style="font-weight:800">#${esc(i.id)} &middot; ${niceDate(i.invoiceDate)}</div>
               <div class="muted">${i.paid ? money(i.paid) + ' paid so far &middot; ' : ''}${i.daysLate ? `<span style="color:#ffa3a3">${i.daysLate} day${i.daysLate === 1 ? '' : 's'} late</span>` : 'Due ' + niceDate(i.dueDate)}</div></div>
-              <div class="amt">${money(i.balance)}</div></div>
+              <div style="text-align:right"><div class="amt">${money(i.balance)}</div>${i.paid ? '<span class="badge hand">Part paid</span>' : ''}</div></div>
             <div class="actions">
               <button class="btn gold sm" onclick="closeSheet(); openPay('${esc(i.id)}')">Got paid</button>
               ${i.pdfUrl ? `<a class="btn ghost sm" href="${i.pdfUrl}" target="_blank">PDF</a>` : ''}
@@ -1106,7 +1121,7 @@
         ${A.paid.length ? A.paid.map(i => `
           <div class="item row"><div class="grow"><div style="font-weight:700">#${esc(i.id)} &middot; ${niceDate(i.invoiceDate)}</div>
             <div class="muted">${i.paidDate ? 'Paid ' + niceDate(i.paidDate) : 'Paid'}</div></div>
-            <div style="text-align:right"><div class="amt">${money(i.total)}</div><span class="badge ok">Paid</span></div></div>`).join('') : '<div class="empty">No paid invoices yet.</div>'}
+            <div style="text-align:right"><div class="amt">${money(i.total)}</div><span class="badge ok">&#10003; Paid</span></div></div>`).join('') : '<div class="empty">No paid invoices yet.</div>'}
       </div>
       <button class="btn ghost big" onclick="closeSheet()">Close</button>`);
     updateBillBtn();
@@ -1176,7 +1191,7 @@
               <div style="font-weight:800">${esc(i.clientName)}</div>
               <div class="muted">#${esc(i.id)} &middot; ${niceDate(i.invoiceDate)}${i.paid ? ' &middot; ' + money(i.paid) + ' paid so far' : ''}</div>
             </div>
-            <div style="text-align:right"><div class="amt">${money(i.balance)}</div>${invoiceBadge(i)}</div>
+            <div style="text-align:right"><div class="amt">${money(i.balance)}</div>${i.paid ? '<span class="badge hand">Part paid</span><br>' : ''}${invoiceBadge(i)}</div>
           </div>
           <div class="actions">
             <button class="btn gold sm" onclick="openPay('${i.id}')">Got paid</button>
@@ -1190,7 +1205,7 @@
       <div class="card list">${d.paidInvoices.length ? d.paidInvoices.map(i => `
         <div class="item row">
           <div class="grow"><div style="font-weight:800">${esc(i.clientName)}</div><div class="muted">#${esc(i.id)} &middot; ${niceDate(i.invoiceDate)}</div></div>
-          <div style="text-align:right"><div class="amt">${money(i.total)}</div><span class="badge ok">Paid</span></div>
+          <div style="text-align:right"><div class="amt">${money(i.total)}</div><span class="badge ok">&#10003; Paid</span></div>
         </div>`).join('') : '<div class="empty">No paid invoices yet.</div>'}
       </div>`;
   }

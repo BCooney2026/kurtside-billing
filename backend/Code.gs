@@ -497,7 +497,7 @@ function bootstrap_() {
       id: String(c.id), name: String(c.name), address: String(c.address), email: String(c.email).trim(),
       phone: String(c.phone), type: String(c.type), active: toBool_(c.active), notes: String(c.notes),
     })),
-    recent: recentJobs_(work, 12),
+    recent: recentJobs_(work, 12, invoices),
     lastNotes: lastNotesByClient_(work),
     otherSuggestions: otherSuggestions_(work),
     unbilledTotal: sumAmounts_(unbilled),
@@ -552,7 +552,9 @@ const OTHER_STARTERS = [
  *   [{ ids, date, clientName, items: 'Weekly Service Visit, Backwash...', amount, note, billed, invoiceIds }]
  * billed: 'all' | 'some' | ''. Remove only ever voids the unbilled lines of a job.
  */
-function recentJobs_(work, n) {
+function recentJobs_(work, n, invoices) {
+  const invById = {};
+  (invoices || []).forEach(i => { invById[i.id] = i; });
   const jobs = [];
   const byKey = {};
   work.forEach(w => {
@@ -580,6 +582,12 @@ function recentJobs_(work, n) {
       ids: j.unbilledIds, date: j.date, clientName: j.clientName, items: j.names.join(', '),
       amount: round2_(j.amount), lines: j.lines, note: j.note, invoiceIds: j.invoiceIds,
       billed: !j.unbilledIds.length ? 'all' : j.invoiceIds.length ? 'some' : '',
+      // paid: 'all' when every invoice this job is on is paid in full, 'some' when money has come in
+      // on at least one of them, '' otherwise. openInvoiceIds drive the "Got paid" button.
+      paid: !j.invoiceIds.length ? ''
+        : j.invoiceIds.every(id => invById[id] && invById[id].status === 'Paid') ? 'all'
+        : j.invoiceIds.some(id => invById[id] && invById[id].paid > 0) ? 'some' : '',
+      openInvoiceIds: j.invoiceIds.filter(id => invById[id] && invById[id].status === 'Open'),
     }));
 }
 
