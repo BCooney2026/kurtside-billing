@@ -497,10 +497,7 @@ function bootstrap_() {
       id: String(c.id), name: String(c.name), address: String(c.address), email: String(c.email).trim(),
       phone: String(c.phone), type: String(c.type), active: toBool_(c.active), notes: String(c.notes),
     })),
-    recent: work.filter(w => !toBool_(w.voided)).slice(-15).reverse().map(w => ({
-      id: String(w.id), date: ymd_(w.date), clientName: String(w.clientName), description: String(w.description),
-      qty: Number(w.qty) || 1, amount: Number(w.amount) || 0, note: String(w.note), invoiceId: w.invoiceId ? String(w.invoiceId) : '',
-    })),
+    recent: recentJobs_(work, 12),
     lastNotes: lastNotesByClient_(work),
     otherSuggestions: otherSuggestions_(work),
     unbilledTotal: sumAmounts_(unbilled),
@@ -548,6 +545,42 @@ const OTHER_STARTERS = [
   { description: 'Fix Auto Fill', price: 125 },
   { description: 'Repair Outside Faucet', price: 75 },
 ];
+
+/**
+ * Recent list for the Log tab, one row per JOB (everything logged in one "Log it" tap), newest first.
+ * A job = same client + same Logged At stamp. Returns
+ *   [{ ids, date, clientName, items: 'Weekly Service Visit, Backwash...', amount, note, billed, invoiceIds }]
+ * billed: 'all' | 'some' | ''. Remove only ever voids the unbilled lines of a job.
+ */
+function recentJobs_(work, n) {
+  const jobs = [];
+  const byKey = {};
+  work.forEach(w => {
+    if (toBool_(w.voided)) return;
+    const stamp = w.loggedAt instanceof Date ? w.loggedAt.getTime() : String(w.id);
+    const key = String(w.clientId) + '|' + stamp;
+    let j = byKey[key];
+    if (!j) {
+      j = byKey[key] = { ids: [], unbilledIds: [], date: ymd_(w.date), clientName: String(w.clientName), names: [],
+        amount: 0, note: String(w.note || ''), invoiceIds: [], sortKey: typeof stamp === 'number' ? stamp : 0, order: jobs.length };
+      jobs.push(j);
+    }
+    j.ids.push(String(w.id));
+    if (!w.invoiceId) j.unbilledIds.push(String(w.id));
+    else if (j.invoiceIds.indexOf(String(w.invoiceId)) < 0) j.invoiceIds.push(String(w.invoiceId));
+    const qty = Number(w.qty) || 1;
+    j.names.push(String(w.description) + (qty > 1 ? ' x' + qty : ''));
+    j.amount += Number(w.amount) || 0;
+  });
+  return jobs
+    .sort((a, b) => (b.sortKey - a.sortKey) || (b.order - a.order))
+    .slice(0, n)
+    .map(j => ({
+      ids: j.unbilledIds, date: j.date, clientName: j.clientName, items: j.names.join(', '),
+      amount: round2_(j.amount), note: j.note, invoiceIds: j.invoiceIds,
+      billed: !j.unbilledIds.length ? 'all' : j.invoiceIds.length ? 'some' : '',
+    }));
+}
 
 /** Most recent non-empty note per client: { clientId: { date:'yyyy-MM-dd', note } }. */
 function lastNotesByClient_(work) {
@@ -614,12 +647,15 @@ function logWork_(p) {
 }
 
 /** Removes an unbilled entry (kept in the sheet as Voided for history). */
-function voidWork_(entryId) {
+/** Removes a job's unbilled lines (one id or an array of ids). Kept in the sheet as Voided for history. */
+function voidWork_(ids) {
   return withLock_(() => {
-    const w = findById_(SHEETS.work, entryId);
-    if (!w) throw new Error('Entry not found.');
-    if (w.invoiceId) throw new Error('Already billed on invoice #' + w.invoiceId + '. It can not be removed from here.');
-    updateRow_(SHEETS.work, w._row, { voided: true });
+    const list = (Array.isArray(ids) ? ids : [ids]).map(String);
+    const rows = readTable_(SHEETS.work).filter(w => list.indexOf(String(w.id)) >= 0);
+    if (!rows.length) throw new Error('Entry not found.');
+    const billed = rows.find(w => w.invoiceId);
+    if (billed) throw new Error('Already billed on invoice #' + billed.invoiceId + '. It can not be removed from here.');
+    rows.forEach(w => updateRow_(SHEETS.work, w._row, { voided: true }));
     return bootstrap_();
   });
 }

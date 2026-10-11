@@ -459,10 +459,9 @@
 
   function renderLog() {
     const d = S.data;
-    const services = d.prices.filter(p => p.active && p.kind === 'Service');
-    const extras = d.prices.filter(p => p.active && p.kind === 'Extra');
     const canLog = S.clientId && (Object.keys(S.items).length || S.custom || S.credit);
     const picked = S.clientId ? clientById(S.clientId) : null;
+    const choices = orderedChoices(d.prices, picked);
     const anyClients = d.clients.some(c => c.active);
     const lastNote = S.clientId && d.lastNotes ? d.lastNotes[S.clientId] : null;
 
@@ -507,11 +506,8 @@
       <input type="date" class="input" value="${S.date}" max="${d.today}" onchange="S.date = this.value">
 
       <div class="lbl">What</div>
-      <div class="chips">${services.map(chip).join('')}</div>
-
-      <div class="lbl">Extras</div>
       <div class="chips">
-        ${extras.map(chip).join('')}
+        ${choices.map(chip).join('')}
         <button class="chip ${S.custom ? 'sel' : ''}" onclick="toggleCustom()">+ Other</button>
         <button class="chip ${S.credit ? 'sel' : ''}" onclick="toggleCredit()">&minus; Credit</button>
       </div>
@@ -549,17 +545,17 @@
       <button class="btn gold big" id="logBtn" ${canLog ? '' : 'disabled'} onclick="logWork()">${logButtonText(canLog)}</button>
 
       <div class="lbl">Recent</div>
-      <div class="card list">${d.recent.length ? d.recent.map(w => `
+      <div class="card list">${d.recent.length ? d.recent.map((j, i) => `
         <div class="item row">
           <div class="grow">
-            <div style="font-weight:800">${esc(w.clientName)}</div>
-            <div class="muted">${niceDate(w.date)} &middot; ${esc(w.description)}${w.qty > 1 ? ' x' + w.qty : ''}${w.note ? ' &middot; ' + esc(w.note) : ''}</div>
+            <div style="font-weight:800">${esc(j.clientName)}</div>
+            <div class="muted">${niceDate(j.date)} &middot; ${esc(j.items)}</div>
           </div>
           <div style="text-align:right">
-            <div class="amt">${money(w.amount)}</div>
-            ${w.invoiceId
-              ? `<span class="badge">Billed #${esc(w.invoiceId)}</span>`
-              : `<button class="btn danger sm" style="margin-top:6px" onclick="voidWork('${w.id}')">Remove</button>`}
+            <div class="amt">${money(j.amount)}</div>
+            ${j.billed === 'all'
+              ? `<span class="badge">Billed #${esc(j.invoiceIds.join(', #'))}</span>`
+              : `<button class="btn danger sm" style="margin-top:6px" onclick="voidJob(${i})">Remove</button>`}
           </div>
         </div>`).join('') : '<div class="empty">Nothing logged yet.</div>'}
       </div>`;
@@ -572,6 +568,24 @@
     'Watch: pump noise, leak at return',
     'Next week: bring filter cartridge',
   ].join('&#10;');
+
+  /**
+   * One list of choices, most used first, shaped by the client:
+   *   Weekly client:      Weekly Visit, then extras, then Opening / Closing (twice a year) near the end.
+   *   Open/Close client:  Opening / Closing first (that is the whole job), then extras. No Weekly Visit.
+   *   No client yet:      same order as a weekly client.
+   * Within each group the Price List "sort" column decides (lower = earlier).
+   */
+  function orderedChoices(prices, client) {
+    const active = prices.filter(p => p.active).sort((a, b) => a.sort - b.sort);
+    const visit = active.filter(p => p.id === 'VISIT');
+    const seasonal = active.filter(p => p.kind === 'Service' && p.id !== 'VISIT');
+    const extras = active.filter(p => p.kind === 'Extra');
+    if (client && client.type !== 'Weekly') return seasonal.concat(extras);
+    // Extras that are used less than openings/closings (sort 20+) go after them.
+    const common = extras.filter(p => p.sort < 20), rare = extras.filter(p => p.sort >= 20);
+    return visit.concat(common, seasonal, rare);
+  }
 
   const logButtonText = ok => ok ? 'Log it  ' + money(logTotal()) : 'Log it';
 
@@ -656,9 +670,12 @@
     }
   }
 
-  function voidWork(id) {
-    if (!confirm('Remove this entry? It will not be billed.')) return;
-    run('voidWork', id, 'Removed');
+  /** Removes a whole job from Recent (only its unbilled lines; billed ones stay on their invoice). */
+  function voidJob(i) {
+    const j = S.data.recent[i];
+    const what = j.billed === 'some' ? 'the unbilled part of this job' : 'this job';
+    if (!confirm(`Remove ${what} (${j.clientName}, ${money(j.amount)})? It will not be billed.`)) return;
+    run('voidWork', j.ids, 'Removed');
   }
 
   // ----- Water tests -----
