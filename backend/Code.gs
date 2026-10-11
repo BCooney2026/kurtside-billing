@@ -72,6 +72,8 @@ const PROP_API_KEY = 'ANTHROPIC_API_KEY';      // Script Properties key holding 
 const VISION_MODEL = 'claude-haiku-5-5';       // cheapest current Claude model with vision
 const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
 const STRIP_DAILY_LIMIT = 40;                  // max AI strip reads per day (cost guard)
+const STRIP_MAX_TOKENS = 4000;                 // room for the model's own thinking plus the answer (thinking counts toward this)
+const STRIP_EFFORT = 'medium';                 // matching pads to chart rows needs some reasoning; 'low' guessed rows wrong
 
 /**
  * Water chemistry targets for a chlorine residential pool. One source of truth: the app colors
@@ -701,61 +703,141 @@ function countStripRead_() {
   cache.put(k, String(n + 1), 21600);
 }
 
-/** Sends the photo to Claude and returns { readings: {fc,tc,ph,ta,ch,cya}, notes, found }. */
+/**
+ * Sends the photo to Claude and returns { readings: {fc,tc,ph,ta,ch,cya}, notes, found }.
+ * Uses structured outputs (output_config.format json_schema) so the reply is always valid JSON in
+ * this exact shape. If the API ever rejects that option, it retries once as plain text, and
+ * parseStripReply_() digs the numbers out. Problems come back in `notes` so they show on screen
+ * (Apps Script does not log anonymous web app calls where you can see them).
+ */
 function askClaudeForStrip_(b64, apiKey) {
   const prompt = [
     'This photo shows a swimming pool test strip held next to the color chart printed on its bottle.',
-    'Compare each pad on the strip to the matching row of the chart in the SAME photo (same lighting) and report the value printed on the chart.',
-    'If a pad falls between two chart blocks, use the value halfway between them.',
-    'Report these, in ppm except pH:',
-    '  fc = free chlorine, tc = total chlorine, ph = pH, ta = total alkalinity,',
-    '  ch = total or calcium hardness, cya = cyanuric acid / stabilizer.',
+    'Step 1: count the colored pads on the strip and the color rows on the chart. Use any labels printed on the bottle (Free Chlorine, Total Chlorine, pH, Alkalinity, Hardness, Cyanuric Acid / Stabilizer) and the numbers printed above each row to decide which test each row is.',
+    'Step 2: pads are in the same order along the strip as the rows are on the chart. Pair each pad with its row in that order. If part of the strip or chart is cut off, only report the pairs you can see clearly.',
+    'Step 3: compare each pad to the color blocks in its own row only, in the SAME photo (same lighting), and report the value printed for the closest block.',
+    'If a pad falls between two chart blocks, report the single number halfway between them. Never report a range.',
+    'Values (ppm, except pH): fc = free chlorine, tc = total chlorine, ph = pH, ta = total alkalinity,',
+    'ch = total or calcium hardness, cya = cyanuric acid / stabilizer.',
     'Use null for any value the strip does not test or that you cannot read with confidence. Ignore bromine.',
-    'Reply with ONLY this JSON, no other text:',
-    '{"found": true, "readings": {"fc": 3, "tc": 3, "ph": 7.5, "ta": 100, "ch": 250, "cya": 40}, "notes": "one short sentence about anything uncertain"}',
-    'Set "found" to false if there is no test strip or no color chart in the photo.',
+    'Set found to false if there is no test strip or no color chart in the photo.',
+    'notes: one short sentence about anything uncertain (lighting, glare, a missing pad), or an empty string.',
   ].join('\n');
 
+  const num = { anyOf: [{ type: 'number' }, { type: 'null' }] };
+  const schema = {
+    type: 'object',
+    properties: {
+      found: { type: 'boolean' },
+      readings: {
+        type: 'object',
+        properties: { fc: num, tc: num, ph: num, ta: num, ch: num, cya: num },
+        required: READING_KEYS,
+        additionalProperties: false,
+      },
+      notes: { type: 'string' },
+    },
+    required: ['found', 'readings', 'notes'],
+    additionalProperties: false,
+  };
+
+  const request = {
+    model: VISION_MODEL,
+    max_tokens: STRIP_MAX_TOKENS,
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } },
+        { type: 'text', text: prompt },
+      ],
+    }],
+    output_config: { effort: STRIP_EFFORT, format: { type: 'json_schema', schema: schema } },
+  };
+
+  let res = postToClaude_(request, apiKey);
+  if (res.code === 400 && /output_config|format|schema|effort/i.test(res.message)) {
+    console.warn('Structured output rejected, retrying as plain text: ' + res.message);
+    delete request.output_config;
+    request.messages[0].content[1].text = prompt + '\nReply with ONLY a JSON object with keys found, readings {fc,tc,ph,ta,ch,cya}, notes.';
+    res = postToClaude_(request, apiKey);
+  }
+
+  if (res.code !== 200) {
+    console.error('Claude strip read failed (' + res.code + '): ' + res.message);
+    if (res.code === 401) throw new Error('Strip reader API key is wrong. Type the numbers by hand.');
+    if (/credit/i.test(res.message)) throw new Error('Strip reader is out of credit. Type the numbers by hand.');
+    throw new Error('Strip reader error ' + res.code + ': ' + res.message.slice(0, 120));
+  }
+
+  const text = (res.body.content || []).filter(c => c.type === 'text').map(c => c.text).join('');
+  const stop = String(res.body.stop_reason || '');
+  if (stop === 'refusal') {
+    return { readings: blankReadings_(), notes: 'The reader declined this photo. Type the numbers.', found: true };
+  }
+  if (!text.trim()) {
+    const types = (res.body.content || []).map(c => c.type).join(', ') || 'nothing';
+    console.error('Empty strip reply. stop_reason=' + stop + ' blocks=' + types);
+    return {
+      readings: blankReadings_(), found: true,
+      notes: stop === 'max_tokens'
+        ? 'The reader ran out of room before answering. Try again.'
+        : 'The reader sent no answer (stop: ' + (stop || 'none') + ', got: ' + types + ').',
+    };
+  }
+  return parseStripReply_(text);
+}
+
+/** POSTs to the Messages API. Returns { code, body, message }. Never throws on HTTP errors. */
+function postToClaude_(request, apiKey) {
   const res = UrlFetchApp.fetch(ANTHROPIC_URL, {
     method: 'post',
     contentType: 'application/json',
     headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
     muteHttpExceptions: true,
-    payload: JSON.stringify({
-      model: VISION_MODEL,
-      max_tokens: 300,
-      messages: [{
-        role: 'user',
-        content: [
-          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } },
-          { type: 'text', text: prompt },
-        ],
-      }],
-    }),
+    payload: JSON.stringify(request),
   });
-
-  const code = res.getResponseCode();
   let body = {};
-  try { body = JSON.parse(res.getContentText()); } catch (e) { /* handled below */ }
-  if (code !== 200) {
-    const msg = String((body.error && body.error.message) || res.getContentText()).slice(0, 300);
-    console.error('Claude strip read failed (' + code + '): ' + msg);
-    if (code === 401) throw new Error('Strip reader API key is wrong. Type the numbers by hand.');
-    if (/credit/i.test(msg)) throw new Error('Strip reader is out of credit. Type the numbers by hand.');
-    throw new Error('Could not read the strip right now. Type the numbers by hand.');
+  try { body = JSON.parse(res.getContentText()); } catch (e) { /* non-JSON error page */ }
+  const message = String((body.error && body.error.message) || (res.getResponseCode() === 200 ? '' : res.getContentText()));
+  return { code: res.getResponseCode(), body: body, message: message };
+}
+
+function blankReadings_() {
+  const r = {};
+  READING_KEYS.forEach(k => { r[k] = ''; });
+  return r;
+}
+
+/**
+ * Turns Claude's reply into { readings, notes, found }. Tries strict JSON first, then the {...}
+ * inside any extra text, then pulls each key's first number out by pattern (survives ranges like
+ * "7.2-7.4" or stray words). If nothing parses, the start of the raw reply comes back in notes.
+ */
+function parseStripReply_(text) {
+  let parsed = null;
+  const tryParse = t => { try { return JSON.parse(t); } catch (e) { return null; } };
+  parsed = tryParse(text);
+  if (!parsed) {
+    const a = text.indexOf('{');
+    const b = text.lastIndexOf('}');
+    if (a >= 0 && b > a) parsed = tryParse(text.slice(a, b + 1));
   }
 
-  const text = (body.content || []).filter(c => c.type === 'text').map(c => c.text).join('');
-  const start = text.indexOf('{');
-  const end = text.lastIndexOf('}');
-  let parsed;
-  try { parsed = JSON.parse(text.slice(start, end + 1)); } catch (e) {
-    console.error('Unreadable strip reply: ' + text);
-    throw new Error('Could not read the strip. Try another photo or type the numbers.');
+  const readings = blankReadings_();
+  if (parsed && parsed.readings) {
+    READING_KEYS.forEach(k => { readings[k] = cleanReading_(parsed.readings[k]); });
+    return { readings, notes: String(parsed.notes || '').slice(0, 200), found: parsed.found !== false };
   }
-  const readings = {};
-  READING_KEYS.forEach(k => { readings[k] = cleanReading_(parsed.readings && parsed.readings[k]); });
-  return { readings, notes: String(parsed.notes || '').slice(0, 200), found: parsed.found !== false };
+
+  let any = false;
+  READING_KEYS.forEach(k => {
+    const m = text.match(new RegExp('"?' + k + '"?\\s*[:=]\\s*"?(-?\\d+(?:\\.\\d+)?)', 'i'));
+    if (m) { readings[k] = cleanReading_(m[1]); any = true; }
+  });
+  if (any) return { readings, notes: 'Read from a loose reply. Double-check every number.', found: true };
+
+  console.error('Unreadable strip reply: ' + text);
+  return { readings, notes: 'Could not understand the reader: "' + text.replace(/\s+/g, ' ').slice(0, 140) + '"', found: true };
 }
 
 /** Number, or '' for blank / not tested / nonsense. */

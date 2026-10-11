@@ -595,11 +595,15 @@
         ${list.length ? '<button class="btn ghost sm" onclick="openHistory()">History</button>' : ''}
       </div>`;
     if (!client) return `<div class="card water"><div class="muted">Pick a client to test their water.</div></div>`;
+    const tip = S.data.stripReader
+      ? '<div class="muted" style="margin-top:10px;font-size:12px">Photo tip: lay the strip right next to the chart, whole strip and whole chart in the frame, in shade (no direct sun).</div>'
+      : '';
     return `<div class="card water">
       ${last
         ? `<div class="k">Last test &middot; ${niceDate(last.date)}</div><div class="levels">${levelChips(last)}</div>`
         : `<div class="muted">No water tests yet for ${esc(client.name)}.</div>`}
       ${buttons}
+      ${tip}
     </div>`;
   }
 
