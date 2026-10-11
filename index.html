@@ -998,18 +998,24 @@
     if (ok) closeSheet();
   }
 
-  function openHistory() {
-    const client = clientById(S.clientId);
-    const list = (client && (S.data.readings || {})[client.id]) || [];
+  /** Color-coded table of a customer's last tests, newest first. Used on Log (History) and the Dash account. */
+  function historyTable(list) {
     const t = S.data.targets;
-    openSheet(`
-      <h3>Water history</h3>
-      <div class="muted" style="margin:-6px 0 14px">${esc(client ? client.name : '')} &middot; last ${list.length} test${list.length === 1 ? '' : 's'}</div>
+    return `
       <table class="hist">
         <tr><th style="text-align:left">Date</th>${t.map(x => `<th>${x.short}</th>`).join('')}</tr>
         ${list.map(r => `<tr><td class="d">${niceDate(r.date)}</td>${t.map(x => `<td class="${readingStatus(x.key, r)}">${r[x.key] === '' ? '&ndash;' : esc(r[x.key])}</td>`).join('')}</tr>`).join('')}
       </table>
-      <div class="muted" style="margin-top:12px"><span style="color:var(--green)">Green</span> on target &middot; <span style="color:var(--gold)">Gold</span> watch &middot; <span style="color:#ffa3a3">Red</span> adjust. TC is judged by TC minus FC.</div>
+      <div class="muted" style="margin-top:10px;font-size:12px"><span style="color:var(--green)">Green</span> on target &middot; <span style="color:var(--gold)">Gold</span> watch &middot; <span style="color:#ffa3a3">Red</span> adjust. TC is judged by TC minus FC.</div>`;
+  }
+
+  function openHistory() {
+    const client = clientById(S.clientId);
+    const list = (client && (S.data.readings || {})[client.id]) || [];
+    openSheet(`
+      <h3>Water history</h3>
+      <div class="muted" style="margin:-6px 0 14px">${esc(client ? client.name : '')} &middot; last ${list.length} test${list.length === 1 ? '' : 's'}</div>
+      ${historyTable(list)}
       <button class="btn ghost big" onclick="closeSheet()">Close</button>`);
   }
 
@@ -1270,6 +1276,7 @@
             <div class="muted">${i.paidDate ? 'Paid ' + niceDate(i.paidDate) : 'Paid'}</div></div>
             <div style="text-align:right"><div class="amt">${money(i.total)}</div><span class="badge ok">&#10003; Paid</span></div></div>`).join('') : '<div class="empty">No paid invoices yet.</div>'}
       </div>
+      ${waterSection(c)}
       <button class="btn ghost big" onclick="closeSheet()">Close</button>`);
     updateBillBtn();
   }
@@ -1282,6 +1289,18 @@
       openAccount(clientId);
       if (S.tab === 'dash') loadDash();
     }
+  }
+
+  /** Dash account: last reading up top, then the full history. Weekly customers only (open/close pools are not tested). */
+  function waterSection(c) {
+    if (c.type !== 'Weekly') return '';
+    const list = (S.data.readings || {})[c.id] || [];
+    return `
+      <div class="sec">Water history</div>
+      <div class="card water" style="overflow-x:auto">
+        ${list.length ? `<div class="k" style="margin-bottom:6px">Last test &middot; ${niceDate(list[0].date)}</div><div class="levels" style="margin-bottom:12px">${levelChips(list[0])}</div>${historyTable(list)}`
+          : '<div class="empty">No water tests yet.</div>'}
+      </div>`;
   }
 
   function checkedItems() { return [...document.querySelectorAll('#sheet .pick input:checked')]; }
@@ -1457,11 +1476,16 @@
         <label class="field"><span>Business name</span><input class="input" id="setBiz" value="${esc(st.BUSINESS_NAME)}"></label>
         <label class="field"><span>Your name (signs emails)</span><input class="input" id="setOwner" value="${esc(st.OWNER_NAME)}"></label>
         <label class="field"><span>Phone</span><input class="input" id="setPhone" type="tel" value="${esc(st.BUSINESS_PHONE)}"></label>
-        <label class="field"><span>Email (replies come here)</span><input class="input" id="setEmail" type="email" value="${esc(st.BUSINESS_EMAIL)}" placeholder="Blank = this Google account"></label>
+        <label class="field"><span>Your email (copies and replies)</span><input class="input" id="setEmail" type="text" inputmode="email" autocapitalize="off" value="${esc(st.BUSINESS_EMAIL)}" placeholder="Blank = this Google account"></label>
+        <div class="muted" style="margin:-6px 2px 14px;font-size:12px">More than one? Separate with commas. Customer replies go to the first one.</div>
         <label class="field"><span>Checks payable to</span><input class="input" id="setPayable" value="${esc(st.CHECKS_PAYABLE_TO)}" placeholder="${esc(st.BUSINESS_NAME)}"></label>
         <label class="field"><span>Mail checks to (optional)</span><input class="input" id="setMail" value="${esc(st.MAILING_ADDRESS)}"></label>
         <label class="field"><span>Payment due (days after invoice)</span><input class="input" id="setTerms" type="number" inputmode="numeric" value="${esc(st.TERMS_DAYS)}"></label>
-        <label class="field"><span>Pool reports go to</span><input class="input" id="setReport" type="email" value="${esc(st.REPORT_EMAIL)}" placeholder="Blank = no report emails"></label>
+        <div class="switch">
+          <div><div style="font-weight:800">Email pool reports to customers</div><div class="muted">After every water test, the customer gets their readings (if they have an email)</div></div>
+          <input type="checkbox" id="setClientReports" ${st.CLIENT_REPORTS ? 'checked' : ''}>
+        </div>
+        <label class="field"><span>Send me a copy of every pool report (optional)</span><input class="input" id="setReport" type="text" inputmode="email" autocapitalize="off" value="${esc(st.REPORT_EMAIL)}" placeholder="Blank = no copies"></label>
         <div class="muted" style="margin:-4px 2px 14px">Strip reader: ${d.stripReader ? '<span style="color:var(--green)">on</span>' : 'off (type readings by hand)'}</div>
         <div class="switch">
           <div><div style="font-weight:800">Pause automation</div><div class="muted">Stops late reminders from going to clients</div></div>
@@ -1530,6 +1554,7 @@
       BUSINESS_NAME: $('setBiz').value, OWNER_NAME: $('setOwner').value, BUSINESS_PHONE: $('setPhone').value,
       BUSINESS_EMAIL: $('setEmail').value, CHECKS_PAYABLE_TO: $('setPayable').value, MAILING_ADDRESS: $('setMail').value,
       TERMS_DAYS: $('setTerms').value, AUTOMATION_PAUSED: $('setPaused').checked, REPORT_EMAIL: $('setReport').value,
+      CLIENT_REPORTS: $('setClientReports').checked,
     }, 'Saved');
   }
 

@@ -117,7 +117,7 @@ const PRICE_KINDS = ['Service', 'Extra'];
 const PAY_METHODS = ['Cash', 'Check'];
 
 /** Settings Tommy can change from the app. Everything else is sheet-only. */
-const EDITABLE_SETTINGS = ['BUSINESS_NAME', 'OWNER_NAME', 'BUSINESS_EMAIL', 'BUSINESS_PHONE', 'CHECKS_PAYABLE_TO', 'MAILING_ADDRESS', 'TERMS_DAYS', 'AUTOMATION_PAUSED', 'REPORT_EMAIL'];
+const EDITABLE_SETTINGS = ['BUSINESS_NAME', 'OWNER_NAME', 'BUSINESS_EMAIL', 'BUSINESS_PHONE', 'CHECKS_PAYABLE_TO', 'MAILING_ADDRESS', 'TERMS_DAYS', 'AUTOMATION_PAUSED', 'REPORT_EMAIL', 'CLIENT_REPORTS'];
 
 const DEFAULT_SETTINGS = [
   ['BUSINESS_NAME', 'Kurtside Pool Co.', 'Shown on invoices and emails'],
@@ -135,7 +135,8 @@ const DEFAULT_SETTINGS = [
   ['INVOICE_FOLDER_ID', '', 'Set by setup(). Drive folder that holds invoice PDFs'],
   ['NEXT_INVOICE_NUMBER', '1001', 'Next invoice number. Never lower it'],
   ['APP_PIN', '', 'PIN to open the app. setup() fills in a random 6 digits; change it here any time'],
-  ['REPORT_EMAIL', '', 'Pool Report email after each water test goes here. Blank = no report emails'],
+  ['CLIENT_REPORTS', 'TRUE', 'TRUE emails each customer a Pool Report after every water test (customers with an email only)'],
+  ['REPORT_EMAIL', '', 'Optional: a copy of every Pool Report, with the AI strip reading next to what was saved'],
   ['TEST_PHOTO_FOLDER_ID', '', 'Set by setup(). Drive folder that holds test strip photos'],
 ];
 
@@ -514,6 +515,7 @@ function bootstrap_() {
   const settings = {};
   EDITABLE_SETTINGS.forEach(k => { settings[k] = s[k] === undefined ? '' : String(s[k]); });
   settings.AUTOMATION_PAUSED = toBool_(s.AUTOMATION_PAUSED);
+  settings.CLIENT_REPORTS = clientReportsOn_(s);
 
   return {
     today: ymd_(today),
@@ -668,14 +670,14 @@ function sendBillsReadyEmail(nudge) {
 
 /**
  * Run by hand from the editor to see the bill-day email today. Uses ALL unbilled work (not just last
- * month's) and sends to REPORT_EMAIL, or the owner if that is blank. Nothing is billed.
+ * month's) and sends it to the owner (BUSINESS_EMAIL). Nothing is billed.
  */
 function testBillsEmail() {
   const s = getSettings_();
   const invoices = readTable_(SHEETS.invoices).map(i => invoiceToClient_(i, new Date()));
   const ready = readyBills_(readTable_(SHEETS.work), invoices, addDays_(stripTime_(new Date()), 1));
   if (!ready) { console.log('Nothing unbilled, so there is nothing to show. Log a job first.'); return; }
-  const to = String(s.REPORT_EMAIL || '').trim() || ownerEmail_(s);
+  const to = ownerEmail_(s);
   MailApp.sendEmail({ to: to, name: 'Kurtside Billing', subject: '[TEST] \uD83D\uDCB0 ' + ready.month + ' bills are ready: ' + money_(ready.total),
     htmlBody: billsReadyHtml_(ready, 0, s) });
   console.log('Test email sent to ' + to);
@@ -1003,13 +1005,15 @@ function saveSettings_(obj) {
       if (key === 'TERMS_DAYS') {
         value = Math.round(Number(value));
         if (!(value >= 0 && value <= 90)) throw new Error('Terms must be 0 to 90 days.');
-      } else if (key === 'AUTOMATION_PAUSED') {
+      } else if (key === 'AUTOMATION_PAUSED' || key === 'CLIENT_REPORTS') {
         value = value === true ? 'TRUE' : 'FALSE';
       } else if (key === 'BUSINESS_EMAIL' || key === 'REPORT_EMAIL') {
-        value = String(value || '').trim();
-        if (value && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value)) {
-          throw new Error((key === 'REPORT_EMAIL' ? 'Pool report' : 'Business') + ' email does not look right.');
+        // One or more addresses, separated by commas.
+        const list = addressList_(value);
+        if (list.some(e => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e))) {
+          throw new Error((key === 'REPORT_EMAIL' ? 'Pool report copy' : 'Business') + ' email does not look right.');
         }
+        value = list.join(', ');
       } else {
         value = String(value || '').trim();
       }
@@ -1231,11 +1235,15 @@ function saveReading_(p) {
     if (!READING_KEYS.some(k => row[k] !== '')) throw new Error('Enter at least one reading.');
 
     const s = getSettings_();
-    if (String(s.REPORT_EMAIL || '').trim()) {
-      safely_('pool report ' + row.id, () => {
-        sendPoolReport_(row, p.ai || null, s);
+    const clientEmail = String(client.email || '').trim();
+    if (clientReportsOn_(s) && clientEmail) {
+      safely_('customer pool report ' + row.id, () => {
+        sendClientPoolReport_(row, clientEmail, s);
         row.reportSentAt = new Date();
       });
+    }
+    if (String(s.REPORT_EMAIL || '').trim()) {
+      safely_('pool report copy ' + row.id, () => sendPoolReport_(row, p.ai || null, s));
     }
     appendRow_(SHEETS.readings, row);
     return bootstrap_();
@@ -1309,7 +1317,7 @@ function poolReportBody_(row, ai, forClient) {
   return { html, photo };
 }
 
-/** Internal Pool Report to REPORT_EMAIL right after a test is saved (includes AI-vs-Tommy differences and notes). */
+/** Internal copy of a Pool Report to REPORT_EMAIL (includes AI-vs-saved differences and Tommy's private note). */
 function sendPoolReport_(row, ai, s) {
   const r = poolReportBody_(row, ai, false);
   MailApp.sendEmail({
@@ -1320,6 +1328,53 @@ function sendPoolReport_(row, ai, s) {
     inlineImages: r.photo ? { strip: r.photo } : undefined,
   });
 }
+
+/**
+ * The customer's Pool Report: branded email with every reading, color-coded against target,
+ * plus the strip photo when there is one. No AI comparison and no private notes.
+ */
+function sendClientPoolReport_(row, to, s) {
+  const E = EMAIL_COLORS;
+  const color = { good: E.green, watch: E.gold, fix: E.red, '': E.muted };
+  const word = { good: 'On target', watch: 'Keeping an eye on it', fix: 'Adjusting', '': '' };
+  const tested = TARGETS.filter(t => row[t.key] !== '' && row[t.key] !== null && row[t.key] !== undefined);
+  const statuses = tested.map(t => readingStatus_(t.key, row));
+  const headline = statuses.indexOf('fix') >= 0 ? 'we\u2019re dialing in your water.'
+    : statuses.indexOf('watch') >= 0 ? 'your water is in good shape.' : 'your water is looking great.';
+  const rows = tested.map(t => {
+    const st = readingStatus_(t.key, row);
+    const target = t.combined ? 'Target: within 0.5 of free chlorine' : 'Target: ' + t.ideal[0] + ' to ' + t.ideal[1] + (t.unit ? ' ' + t.unit : '');
+    return [esc_(t.label), target + (word[st] ? ' &middot; <span style="color:' + color[st] + '">' + word[st] + '</span>' : ''),
+      '<span style="color:' + color[st] + '">' + esc_(row[t.key]) + (t.unit ? ' <span style="font-size:12px">' + t.unit + '</span>' : '') + '</span>'];
+  });
+  let photo = null;
+  if (row.photoId) { try { photo = DriveApp.getFileById(String(row.photoId)).getBlob().setName('test-strip.jpg'); } catch (e) { console.warn('Photo missing: ' + row.photoId); } }
+  const html = brandEmail_({
+    preheader: 'Your pool water test from ' + fmt_(row.date, 'MMM d') + '.',
+    eyebrow: 'POOL REPORT &middot; ' + fmt_(row.date, 'MMM d').toUpperCase(),
+    eyebrowColor: E.aqua,
+    headline: 'Hi ' + esc_(firstName_(row.clientName)) + ', ' + headline,
+    sub: 'Here\u2019s what we measured on ' + fmt_(row.date, 'EEEE, MMMM d') + '.',
+    sections: [
+      emailList_('YOUR WATER', rows),
+      photo ? '<div style="padding:0 0 18px"><img src="cid:strip" alt="Your test strip" style="display:block;width:100%;border-radius:12px"></div>' : '',
+      poolFactBox_(),
+    ],
+    signoff: signoff_(s),
+    footerNote: contactsNote_(s),
+  });
+  MailApp.sendEmail({
+    to: to,
+    replyTo: replyEmail_(s),
+    name: String(s.BUSINESS_NAME),
+    subject: 'Your Pool Report: ' + fmt_(row.date, 'MMM d'),
+    htmlBody: html,
+    inlineImages: photo ? { strip: photo } : undefined,
+  });
+}
+
+/** Customer Pool Reports are on unless CLIENT_REPORTS is set to FALSE (missing = on). */
+function clientReportsOn_(s) { return String(s.CLIENT_REPORTS === undefined ? 'TRUE' : s.CLIENT_REPORTS).toUpperCase() !== 'FALSE'; }
 
 // ============================================================
 // Dashboard (the app's Dash tab)
@@ -1675,7 +1730,7 @@ function buildInvoicePdf_(inv, client, entries, s) {
     logo: invoiceLogo_(),
     biz: {
       name: String(s.BUSINESS_NAME || ''), owner: String(s.OWNER_NAME || ''), phone: String(s.BUSINESS_PHONE || ''),
-      email: ownerEmail_(s), payableTo: String(s.CHECKS_PAYABLE_TO || s.BUSINESS_NAME || ''), mailTo: String(s.MAILING_ADDRESS || ''),
+      email: replyEmail_(s), payableTo: String(s.CHECKS_PAYABLE_TO || s.BUSINESS_NAME || ''), mailTo: String(s.MAILING_ADDRESS || ''),
     },
     client: { name: String(client.name || ''), address: String(client.address || ''), email: String(client.email || '') },
     number: inv.id,
@@ -1832,7 +1887,7 @@ function payBox_(inv, s) {
 
 /** First emails from a new Gmail address often land in spam; this asks clients to save the address. */
 function contactsNote_(s) {
-  return 'Add ' + esc_(ownerEmail_(s)) + ' to your contacts so bills never end up in spam.';
+  return 'Add ' + esc_(senderEmail_()) + ' to your contacts so emails from us never end up in spam.';
 }
 
 function sendBillingSummary_(created, s) {
@@ -1853,7 +1908,7 @@ function sendClientEmail_(to, subject, html, s, attachments) {
   MailApp.sendEmail({
     to: to,
     bcc: ownerEmail_(s),
-    replyTo: ownerEmail_(s),
+    replyTo: replyEmail_(s),
     name: String(s.BUSINESS_NAME),
     subject: subject,
     htmlBody: html,
@@ -2055,7 +2110,13 @@ function reminderLevels_(s) {
     .map(n => parseInt(n, 10)).filter(n => n >= 0).sort((a, b) => a - b);
 }
 
-function ownerEmail_(s) { return String(s.BUSINESS_EMAIL || '').trim() || Session.getEffectiveUser().getEmail(); }
+/** Every address in BUSINESS_EMAIL (comma separated), or the sending account. Tommy's notices and blind copies go to all. */
+function ownerEmail_(s) { return addressList_(s.BUSINESS_EMAIL).join(', ') || senderEmail_(); }
+/** Where customer replies go: the first BUSINESS_EMAIL address. Also the address printed on invoices. */
+function replyEmail_(s) { return addressList_(s.BUSINESS_EMAIL)[0] || senderEmail_(); }
+/** The Gmail account the script runs as. Customers should save this one so mail is not marked spam. */
+function senderEmail_() { return Session.getEffectiveUser().getEmail(); }
+function addressList_(v) { return String(v || '').split(/[\s,;]+/).map(x => x.trim()).filter(Boolean); }
 function firstName_(name) { return String(name || '').trim().split(/\s+/)[0] || 'there'; }
 function sumAmounts_(rows) { return round2_(rows.reduce((t, r) => t + (Number(r.amount) || 0), 0)); }
 function round2_(n) { return Math.round((Number(n) || 0) * 100) / 100; }
