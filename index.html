@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!--
-  Curtside Pool Co. Billing: Tommy's iPhone app (hosted on GitHub Pages).
+  Kurtside Pool Co. Billing: Tommy's iPhone app (hosted on GitHub Pages).
   Tabs:
     Log       Pick a client, tap what you did, Log it. Recent entries can be removed until billed.
     Money     What is owed, record cash/check payments, open or resend invoice PDFs.
@@ -8,18 +8,18 @@
   Backend: the Apps Script web app at API_URL (Code.gs doPost). Every request is
   POST {pin, action, payload}. The PIN is asked once per device and kept in localStorage.
   Requests send no cookies, so multiple signed-in Google accounts can never interfere.
-  Files in this folder: index.html, manifest.webmanifest, banner.jpg, apple-touch-icon.png, icon-192.png, icon-512.png
+  Files in this folder: index.html, manifest.webmanifest, banner.png, apple-touch-icon.png, icon-192.png, icon-512.png
 -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Curtside</title>
+<title>Kurtside</title>
 <meta name="theme-color" content="#06111d">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Curtside">
+<meta name="apple-mobile-web-app-title" content="Kurtside">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" type="image/png" href="icon-192.png">
 <link rel="manifest" href="manifest.webmanifest">
@@ -54,7 +54,7 @@
   /* ---------- Hero banner ---------- */
   /* Banner: the full image is always visible (contain), centered and capped at 960px.
      On wide screens the sides are filled with a blurred, darkened copy of the same image. */
-  .hero-banner { position: relative; width: 100%; aspect-ratio: 5 / 2; max-height: 384px; overflow: hidden; background: linear-gradient(160deg, #0b1f33, #15324f); }
+  .hero-banner { position: relative; width: 100%; aspect-ratio: 1842 / 854; max-height: 420px; padding: 6px 0 0; overflow: hidden; background: linear-gradient(160deg, #0b1f33, #15324f); }
   .hero-banner .backdrop { position: absolute; inset: -40px; width: calc(100% + 80px); height: calc(100% + 80px); object-fit: cover; filter: blur(28px) brightness(.45) saturate(1.2); opacity: 0; transition: opacity .6s ease; }
   .hero-banner .main-img { position: relative; display: block; height: 100%; max-width: 960px; width: 100%; margin: 0 auto; object-fit: contain; opacity: 0; transition: opacity .6s ease; }
   .hero-banner.loaded .backdrop, .hero-banner.loaded .main-img { opacity: 1; }
@@ -105,7 +105,8 @@
   .chip.sel .p { color: var(--gold); }
   .chip.dim { opacity: .4; }
   .qty { display: inline-flex; align-items: center; gap: 7px; margin-left: 2px; font-weight: 800; }
-  .qty button { width: 28px; height: 28px; border-radius: 50%; border: 0; background: var(--gold-grad); color: #07121f; font-weight: 800; font-size: 16px; line-height: 28px; padding: 0; }
+  .qty button { width: 30px; height: 30px; border-radius: 50%; border: 0; background: var(--gold-grad); color: #07121f; font-weight: 800; font-size: 17px; line-height: 30px; padding: 0; display: grid; place-items: center; box-shadow: 0 2px 8px rgba(227,189,106,.3); cursor: pointer; }
+  .qty .n { min-width: 14px; text-align: center; color: var(--gold); }
 
   /* ---------- Forms ---------- */
   .field { display: block; margin-bottom: 13px; }
@@ -167,6 +168,13 @@
   #busy .ring { width: 46px; height: 46px; border-radius: 50%; border: 3px solid rgba(227,189,106,.2); border-top-color: var(--gold); animation: spin .8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
 
+  /* ---------- Service notes ---------- */
+  textarea.note-box { min-height: 160px; line-height: 1.5; }
+  .note-box::placeholder { color: rgba(143,164,185,.55); }
+  .last-note { margin: 0 0 10px; padding: 11px 13px; border-radius: 12px; background: rgba(63,208,255,.07); border: 1px solid rgba(63,208,255,.22); font-size: 14px; line-height: 1.45; }
+  .last-note .t { white-space: pre-wrap; }
+  .last-note .k { font-size: 11px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; color: var(--aqua); margin-bottom: 3px; }
+
   /* ---------- PIN gate ---------- */
   #pinGate { position: fixed; inset: 0; z-index: 25; display: none; align-items: center; justify-content: center; padding: 24px; background: radial-gradient(600px 300px at 50% 20%, rgba(63,208,255,.12), transparent 70%), rgba(6,17,29,.94); }
   #pinGate.on { display: flex; }
@@ -181,9 +189,9 @@
 <body>
 
 <div class="hero-banner" id="hero">
-  <img class="backdrop" src="banner.jpg" alt="" onload="document.getElementById('hero').classList.add('loaded')">
-  <img class="main-img" src="banner.jpg" alt="Curtside Pool Co.">
-  <div class="fallback">CURTSIDE POOL CO.</div>
+  <img class="backdrop" src="banner.png" alt="" onload="document.getElementById('hero').classList.add('loaded')">
+  <img class="main-img" src="banner.png" alt="Kurtside Pool Co.">
+  <div class="fallback">KURTSIDE POOL CO.</div>
   <div class="fade"></div>
 </div>
 
@@ -203,7 +211,7 @@
 <div class="sheet-bg" id="sheetBg" onclick="if (event.target === this) closeSheet()"><div class="sheet" id="sheet"></div></div>
 <div id="pinGate">
   <div class="pin-card">
-    <div class="pin-title">Curtside Pool Co.</div>
+    <div class="pin-title">Kurtside Pool Co.</div>
     <div class="muted" style="margin-bottom:18px">Enter your PIN to open billing</div>
     <input id="pinInput" class="input pin-input" type="password" inputmode="numeric" autocomplete="off" maxlength="12" placeholder="&bull;&bull;&bull;&bull;&bull;&bull;" onkeydown="if (event.key === 'Enter') unlock()">
     <button class="btn gold big" style="margin-top:14px" onclick="unlock()">Unlock</button>
@@ -252,14 +260,14 @@
   }
 
   // ---------------- PIN ----------------
-  const PIN_KEY = 'curtsidePin';
+  const PIN_KEY = 'kurtsidePin';
   function loadPin() { try { return localStorage.getItem(PIN_KEY) || ''; } catch (e) { return ''; } }
   function savePin(pin) { try { localStorage.setItem(PIN_KEY, pin); } catch (e) {} }
   function forgetPin() { try { localStorage.removeItem(PIN_KEY); } catch (e) {} }
 
   // ---------------- Backend ----------------
   // The Apps Script web app URL (Deploy > Manage deployments, ends in /exec).
-  const API_URL = 'https://script.google.com/macros/s/AKfycbzAfJ8If5VFxAoDqQ9jfc1sAD1llX4oEgGkX_vFC3T-MoZgjZf-1V5ukQmtqg2j7CfW/exec';
+  const API_URL = 'https://script.google.com/macros/s/AKfycbykZYkYEANosVuqJPJNjaRNGsRJGXS1tzow9BGWxh3tkOuiIlG8w2x4ir34C7Pj4J8LNQ/exec';
 
   /**
    * Every server call: POST {pin, action, payload} to API_URL, get back {ok, data | error}.
@@ -365,15 +373,17 @@
     const canLog = S.clientId && (Object.keys(S.items).length || S.custom);
     const picked = S.clientId ? clientById(S.clientId) : null;
     const anyClients = d.clients.some(c => c.active);
+    const lastNote = S.clientId && d.lastNotes ? d.lastNotes[S.clientId] : null;
 
     const chip = p => {
       const sel = S.items[p.id];
       const noPrice = !(p.price > 0);
       const qty = sel && p.kind === 'Extra'
-        ? `<span class="qty"><button onclick="event.stopPropagation(); bump('${p.id}', -1)">&minus;</button>${sel}<button onclick="event.stopPropagation(); bump('${p.id}', 1)">+</button></span>`
+        ? `<span class="qty"><button onclick="event.stopPropagation(); bump('${p.id}', -1)">&minus;</button><span class="n">${sel}</span><button onclick="event.stopPropagation(); bump('${p.id}', 1)">+</button></span>`
         : '';
-      return `<button class="chip ${sel ? 'sel' : ''} ${noPrice ? 'dim' : ''}" onclick="toggleItem('${p.id}')">
-        ${esc(p.name)} <span class="p">${noPrice ? 'no price' : money(p.price)}</span>${qty}</button>`;
+      // A div, not a button: the +/- stepper buttons live inside it, and buttons cannot nest.
+      return `<div class="chip ${sel ? 'sel' : ''} ${noPrice ? 'dim' : ''}" role="button" tabindex="0" onclick="toggleItem('${p.id}')">
+        ${esc(p.name)} <span class="p">${noPrice ? 'no price' : money(p.price)}</span>${qty}</div>`;
     };
 
     $('tab-log').innerHTML = `
@@ -419,8 +429,14 @@
             <input class="input" id="customPrice" type="number" inputmode="decimal" step="0.01" value="${esc(S.custom.price)}" placeholder="0.00" oninput="S.custom.price = this.value; updateLogButton()"></label>
         </div>` : ''}
 
-      <div class="lbl">Note</div>
-      <textarea class="input" placeholder="Optional. Tap the mic on the keyboard to talk instead of type." oninput="S.note = this.value">${esc(S.note)}</textarea>
+      <div class="lbl">Service notes</div>
+      ${lastNote ? `
+        <div class="last-note">
+          <div class="k">Last note &middot; ${niceDate(lastNote.date)}</div>
+          <div class="t">${esc(lastNote.note)}</div>
+        </div>` : ''}
+      <textarea class="input note-box" placeholder="${NOTE_HINT}" oninput="S.note = this.value">${esc(S.note)}</textarea>
+      <div class="muted" style="margin:6px 2px 0">Private. Notes stay in your log and never print on invoices. Tap the mic on the keyboard to talk.</div>
 
       <button class="btn gold big" id="logBtn" ${canLog ? '' : 'disabled'} onclick="logWork()">${logButtonText(canLog)}</button>
 
@@ -440,6 +456,14 @@
         </div>`).join('') : '<div class="empty">Nothing logged yet.</div>'}
       </div>`;
   }
+
+  /** Placeholder for the service notes box: what is worth tracking week to week. */
+  const NOTE_HINT = [
+    'Cl 3 \u00b7 pH 7.4 \u00b7 filter 18 psi',
+    'Added 2 gal chlorine, 1 lb acid',
+    'Watch: pump noise, leak at return',
+    'Next week: bring filter cartridge',
+  ].join('&#10;');
 
   const logButtonText = ok => ok ? 'Log it  ' + money(logTotal()) : 'Log it';
 
