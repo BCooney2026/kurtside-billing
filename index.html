@@ -547,8 +547,8 @@
       <div class="lbl">Recent</div>
       <div class="card list">${d.recent.length ? d.recent.map((j, i) => `
         <div class="item row">
-          <div class="grow">
-            <div style="font-weight:800">${esc(j.clientName)}</div>
+          <div class="grow" role="button" tabindex="0" style="cursor:pointer" onclick="openJob(${i})">
+            <div style="font-weight:800">${esc(j.clientName)} <span style="color:var(--gold)">&rsaquo;</span></div>
             <div class="muted">${niceDate(j.date)} &middot; ${esc(j.items)}</div>
           </div>
           <div style="text-align:right">
@@ -671,6 +671,34 @@
       S.clientId = ''; S.items = {}; S.custom = null; S.credit = null; S.note = '';
       renderLog();
     }
+  }
+
+  /** Tap a Recent job: every line with its price, the total, the private note, and billed status. */
+  function openJob(i) {
+    const j = S.data.recent[i];
+    const lines = j.lines || [];
+    const status = j.billed === 'all' ? 'Billed on #' + j.invoiceIds.join(', #')
+      : j.billed === 'some' ? 'Partly billed (#' + j.invoiceIds.join(', #') + ')'
+      : 'Not billed yet. Goes on the next bill.';
+    openSheet(`
+      <h3>${esc(j.clientName)}</h3>
+      <div class="muted" style="margin:-8px 0 12px">${niceDate(j.date)} &middot; ${esc(status)}</div>
+      <div class="card list">
+        ${lines.length ? lines.map(l => `
+          <div class="item row">
+            <div class="grow" style="font-weight:700">${esc(l.name)}${l.qty > 1 ? ' <span class="muted">x' + l.qty + '</span>' : ''}</div>
+            <div class="amt" ${l.amount < 0 ? 'style="color:var(--red)"' : ''}>${money(l.amount)}</div>
+          </div>`).join('') : `<div class="item">${esc(j.items)}</div>`}
+        <div class="item row">
+          <div class="grow" style="font-weight:800">Total</div>
+          <div class="amt" style="font-weight:800">${money(j.amount)}</div>
+        </div>
+      </div>
+      ${j.note ? `<div class="lbl">Service notes</div><div class="card" style="white-space:pre-wrap">${esc(j.note)}</div>` : ''}
+      <div class="row" style="margin-top:14px">
+        ${j.billed !== 'all' ? `<button class="btn danger" style="flex:1" onclick="closeSheet(); voidJob(${i})">Remove</button>` : ''}
+        <button class="btn" style="flex:1" onclick="closeSheet()">Close</button>
+      </div>`);
   }
 
   /** Removes a whole job from Recent (only its unbilled lines; billed ones stay on their invoice). */

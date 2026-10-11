@@ -562,7 +562,7 @@ function recentJobs_(work, n) {
     let j = byKey[key];
     if (!j) {
       j = byKey[key] = { ids: [], unbilledIds: [], date: ymd_(w.date), clientName: String(w.clientName), names: [],
-        amount: 0, note: String(w.note || ''), invoiceIds: [], sortKey: typeof stamp === 'number' ? stamp : 0, order: jobs.length };
+        amount: 0, lines: [], note: String(w.note || ''), invoiceIds: [], sortKey: typeof stamp === 'number' ? stamp : 0, order: jobs.length };
       jobs.push(j);
     }
     j.ids.push(String(w.id));
@@ -571,13 +571,14 @@ function recentJobs_(work, n) {
     const qty = Number(w.qty) || 1;
     j.names.push(String(w.description) + (qty > 1 ? ' x' + qty : ''));
     j.amount += Number(w.amount) || 0;
+    j.lines.push({ name: String(w.description), qty: qty, amount: round2_(Number(w.amount) || 0), billed: !!w.invoiceId });
   });
   return jobs
     .sort((a, b) => (b.sortKey - a.sortKey) || (b.order - a.order))
     .slice(0, n)
     .map(j => ({
       ids: j.unbilledIds, date: j.date, clientName: j.clientName, items: j.names.join(', '),
-      amount: round2_(j.amount), note: j.note, invoiceIds: j.invoiceIds,
+      amount: round2_(j.amount), lines: j.lines, note: j.note, invoiceIds: j.invoiceIds,
       billed: !j.unbilledIds.length ? 'all' : j.invoiceIds.length ? 'some' : '',
     }));
 }
