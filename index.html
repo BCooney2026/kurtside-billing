@@ -499,7 +499,7 @@
         </button>`
         : `<div class="card empty">No clients yet. Add them in Settings.</div>`}
 
-      ${anyClients && Array.isArray(d.targets) ? `<div class="lbl">Water</div>${waterCard(picked)}` : ''}
+      ${anyClients && Array.isArray(d.targets) && (!picked || picked.type === 'Weekly') ? `<div class="lbl">Water</div>${waterCard(picked)}` : ''}
 
       <div class="lbl">When</div>
       <input type="date" class="input" value="${S.date}" max="${d.today}" onchange="S.date = this.value">
@@ -659,7 +659,7 @@
         <button class="btn ghost sm" onclick="openReading(null)">Type it in</button>
         ${list.length ? '<button class="btn ghost sm" onclick="openHistory()">History</button>' : ''}
       </div>`;
-    if (!client) return `<div class="card water"><div class="muted">Pick a client to test their water.</div></div>`;
+    if (!client) return `<div class="card water"><div class="muted">Pick a weekly client to test their water.</div></div>`;
     const tip = S.data.stripReader
       ? '<div class="muted" style="margin-top:10px;font-size:12px">Photo tip: lay the strip right next to the chart, whole strip and whole chart in the frame, in shade (no direct sun).</div>'
       : '';
@@ -913,7 +913,7 @@
       ${m.topClients.length ? `<div class="card" style="margin-top:10px"><div style="font-weight:800;margin-bottom:6px">Top clients this season</div>
         ${m.topClients.map(c => `<div class="hbar"><div class="n">${esc(c.name)}</div><div class="track"><div class="fill" style="width:${(c.amount / maxTop * 100).toFixed(1)}%"></div></div><div class="a">${whole(c.amount)}</div></div>`).join('')}</div>` : ''}
 
-      <div class="lbl">Water</div>
+      <div class="lbl">Water &middot; weekly pools</div>
       <div class="tiles">
         <div class="tile"><div class="k">Need adjusting</div><div class="v" style="color:${wa.needAttention ? '#ffa3a3' : 'var(--ink)'}">${wa.needAttention}</div><div class="s">${wa.watch} to watch &middot; ${wa.good} good</div></div>
         <div class="tile"><div class="k">Tests this month</div><div class="v">${wa.testsThisMonth}</div><div class="s">${wa.untested} pool${wa.untested === 1 ? '' : 's'} never tested</div></div>

@@ -1097,7 +1097,8 @@ function dashboard_() {
   const latestByClient = {};
   readings.forEach(r => { const k = String(r.clientId); if (!latestByClient[k] || r.date > latestByClient[k].date) latestByClient[k] = r; });
   const rank = { fix: 3, watch: 2, good: 1, '': 0 };
-  const pools = clients.map(c => {
+  // Water is tracked for weekly service clients only. Open/close-only pools are never tested by Tommy.
+  const pools = clients.filter(c => c.type === 'Weekly').map(c => {
     const r = latestByClient[String(c.id)];
     if (!r) return { name: String(c.name), tested: false };
     const vals = {}; READING_KEYS.forEach(k => { vals[k] = r[k] === '' ? '' : Number(r[k]); });
