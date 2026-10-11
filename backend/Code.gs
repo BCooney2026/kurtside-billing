@@ -418,6 +418,7 @@ function api(pin, action, payload) {
     recordPayment: recordPayment_, resendInvoice: resendInvoice_,
     saveClient: saveClient_, savePrice: savePrice_, saveSettings: saveSettings_,
     readStrip: readStrip_, saveReading: saveReading_, dashboard: dashboard_,
+    emailCenter: emailCenter_,
   };
   const handler = handlers[action];
   if (!handler) throw new Error('Unknown action: ' + action);
@@ -926,8 +927,12 @@ function readingStatus_(key, values) {
   return 'fix';
 }
 
-/** Pool Report to REPORT_EMAIL: color-coded readings, the strip photo, and any AI-vs-Tommy differences. */
-function sendPoolReport_(row, ai, s) {
+/**
+ * Pool Report body: color-coded readings table plus the strip photo (as cid:strip).
+ * ai = what Claude read (only shown on the internal copy, so Brian can judge accuracy).
+ * Returns { html, photo } where photo is the image blob or null.
+ */
+function poolReportBody_(row, ai, forClient) {
   const colors = { good: '#1f9d63', watch: '#c98a12', fix: '#d64545', '': '#5b6b7b' };
   const words = { good: 'Good', watch: 'Watch', fix: 'Adjust', '': '' };
   const rows = TARGETS.map(t => {
@@ -945,22 +950,160 @@ function sendPoolReport_(row, ai, s) {
   }).join('');
 
   let photo = null;
-  if (row.photoId) { try { photo = DriveApp.getFileById(row.photoId).getBlob(); } catch (e) { console.warn('Photo missing: ' + row.photoId); } }
+  if (row.photoId) { try { photo = DriveApp.getFileById(String(row.photoId)).getBlob().setName('test-strip.jpg'); } catch (e) { console.warn('Photo missing: ' + row.photoId); } }
 
-  const body = '<p style="font-size:18px;margin:0 0 4px"><b>' + esc_(row.clientName) + '</b></p>' +
+  const html = (forClient ? '<p>Hi ' + esc_(firstName_(row.clientName)) + ',</p><p>Here are the results from your latest pool water test.</p>'
+      : '<p style="font-size:18px;margin:0 0 4px"><b>' + esc_(row.clientName) + '</b></p>') +
     '<p style="margin:0 0 12px;color:#5b6b7b">Water test, ' + fmt_(row.date, 'EEEE, MMM d, yyyy') + '</p>' +
     '<table style="width:100%;border-collapse:collapse;font-size:14px">' +
     '<tr style="background:#0b1f33;color:#fff"><th style="padding:8px;text-align:left">Test</th><th style="padding:8px;text-align:right">Reading</th><th style="padding:8px;text-align:left">Status</th><th style="padding:8px;text-align:left">Target</th></tr>' +
     rows + '</table>' +
-    (row.note ? '<p><b>Note:</b> ' + esc_(row.note) + '</p>' : '') +
+    (!forClient && row.note ? '<p><b>Note:</b> ' + esc_(row.note) + '</p>' : '') +
     (photo ? '<p style="margin-top:16px"><img src="cid:strip" alt="Test strip photo" style="width:100%;max-width:520px;border-radius:8px"></p>' : '');
+  return { html, photo };
+}
 
+/** Internal Pool Report to REPORT_EMAIL right after a test is saved (includes AI-vs-Tommy differences and notes). */
+function sendPoolReport_(row, ai, s) {
+  const r = poolReportBody_(row, ai, false);
   MailApp.sendEmail({
     to: String(s.REPORT_EMAIL).trim(),
     name: String(s.BUSINESS_NAME),
     subject: 'Pool Report: ' + row.clientName + ', ' + fmt_(row.date, 'MMM d'),
-    htmlBody: emailShell_(body, s, false),
-    inlineImages: photo ? { strip: photo } : undefined,
+    htmlBody: emailShell_(r.html, s, false),
+    inlineImages: r.photo ? { strip: r.photo } : undefined,
+  });
+}
+
+// ============================================================
+// Email center (Dash tab > Send to clients). Button-only, nothing automatic.
+// Every type works in two passes: mode 'preview' lists who would get what,
+// mode 'send' sends to the ids Tommy left checked. Notes never go to clients.
+//   invoices   Bill now: invoice all unbilled work through today
+//   reports    Latest Pool Report to each owner
+//   reminders  Friendly balance reminder with the invoice PDF
+//   announce   Tommy's own subject + message to selected clients
+// ============================================================
+
+const EMAIL_TYPES = ['invoices', 'reports', 'reminders', 'announce'];
+
+/** p = { type, mode: 'preview' | 'send', ids: [...], subject, message } */
+function emailCenter_(p) {
+  const type = String(p && p.type);
+  if (EMAIL_TYPES.indexOf(type) < 0) throw new Error('Unknown email type.');
+  const rows = emailCandidates_(type);
+  if (p.mode !== 'send') return { type, rows: rows.map(r => ({ id: r.id, name: r.name, email: r.email, detail: r.detail, eligible: r.eligible })) };
+
+  const ids = (Array.isArray(p.ids) ? p.ids : []).map(String);
+  const picked = rows.filter(r => r.eligible && ids.indexOf(String(r.id)) >= 0);
+  if (!picked.length) throw new Error('Nobody selected.');
+  const subject = String(p.subject || '').trim();
+  const message = String(p.message || '').trim();
+  if (type === 'announce' && (!subject || !message)) throw new Error('Add a subject and a message.');
+
+  const emailsNeeded = type === 'invoices' ? picked.filter(r => r.email).length : picked.length;
+  if (MailApp.getRemainingDailyQuota() < emailsNeeded + 1) {
+    throw new Error('Gmail daily limit is too close. Only ' + MailApp.getRemainingDailyQuota() + ' emails left today. Try tomorrow.');
+  }
+
+  return withLock_(() => {
+    const s = getSettings_();
+    const done = [], failed = [];
+    if (type === 'invoices') {
+      const created = [];
+      picked.forEach(r => safely_('bill now ' + r.name, () => {
+        const inv = createInvoice_(r.client, r.entries, s);
+        if (inv) { created.push(inv); done.push(r.name); } else failed.push(r.name);
+      }));
+      if (created.length) safely_('billing summary', () => sendBillingSummary_(created, s));
+      return Object.assign(bootstrap_(), { sendResult: { done, failed, handOver: created.filter(i => !i.sentAt).length } });
+    }
+    picked.forEach(r => {
+      try {
+        if (type === 'reports') {
+          const body = poolReportBody_(r.reading, null, true);
+          sendClientEmailWithImages_(r.email, 'Your pool water report: ' + fmt_(r.reading.date, 'MMM d'), body.html + signoff_(s), s, body.photo ? { strip: body.photo } : null);
+        } else if (type === 'reminders') {
+          sendBalanceNote_(r.invoice, s);
+        } else {
+          const html = '<p>Hi ' + esc_(firstName_(r.name)) + ',</p>' +
+            message.split(/\n\s*\n/).map(par => '<p>' + esc_(par).replace(/\n/g, '<br>') + '</p>').join('') + signoff_(s);
+          sendClientEmail_(r.email, subject, html, s, []);
+        }
+        done.push(r.name);
+      } catch (e) {
+        console.error(type + ' to ' + r.name + ' failed: ' + e);
+        failed.push(r.name);
+      }
+    });
+    return { sendResult: { done, failed } };
+  });
+}
+
+/** Who each email type would go to, with a one-line detail. eligible = can actually be sent. */
+function emailCandidates_(type) {
+  const clients = readTable_(SHEETS.clients).filter(c => toBool_(c.active));
+  const emailOf = c => String(c.email || '').trim();
+
+  if (type === 'invoices') {
+    const groups = collectUnbilled_(addDays_(stripTime_(new Date()), 1));
+    const byId = indexBy_(readTable_(SHEETS.clients), 'id');
+    return Object.keys(groups).map(id => {
+      const c = byId[id];
+      if (!c) return null;
+      const entries = groups[id];
+      return {
+        id, name: String(c.name), email: emailOf(c), client: c, entries, eligible: true,
+        detail: entries.length + ' item' + (entries.length === 1 ? '' : 's') + ' · ' + money_(sumAmounts_(entries)) + (emailOf(c) ? '' : ' · no email, PDF to hand over'),
+      };
+    }).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  if (type === 'reports') {
+    const latest = {};
+    readTable_(SHEETS.readings).filter(r => r.date instanceof Date).forEach(r => {
+      const k = String(r.clientId); if (!latest[k] || r.date > latest[k].date) latest[k] = r;
+    });
+    return clients.filter(c => latest[String(c.id)]).map(c => {
+      const r = latest[String(c.id)];
+      return { id: String(c.id), name: String(c.name), email: emailOf(c), reading: r, eligible: !!emailOf(c),
+        detail: 'Test from ' + fmt_(r.date, 'MMM d') + (emailOf(c) ? '' : ' · no email') };
+    }).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  if (type === 'reminders') {
+    const today = stripTime_(new Date());
+    return readTable_(SHEETS.invoices).filter(i => i.status === 'Open' && Number(i.balance) > 0).map(i => {
+      const late = daysBetween_(i.dueDate, today);
+      const email = String(i.email || '').trim();
+      return { id: String(i.id), name: String(i.clientName), email, invoice: i, eligible: !!email,
+        detail: '#' + i.id + ' · ' + money_(i.balance) + ' · ' + (late > 0 ? late + ' days late' : 'due ' + fmt_(i.dueDate, 'MMM d')) + (email ? '' : ' · no email') };
+    }).sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  return clients.map(c => ({ id: String(c.id), name: String(c.name), email: emailOf(c), eligible: !!emailOf(c),
+    detail: emailOf(c) || 'no email' })).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** On-demand friendly balance note. Does not touch the automatic reminder schedule. */
+function sendBalanceNote_(inv, s) {
+  const late = daysBetween_(inv.dueDate, new Date());
+  const body = '<p>Hi ' + esc_(firstName_(inv.clientName)) + ',</p>' +
+    '<p>' + (late > 0 ? 'Just a friendly note that invoice #' + inv.id + ' is past due.' : 'Just a friendly note about your open invoice.') + '</p>' +
+    summaryBox_([['Invoice', '#' + inv.id], ['Balance', money_(inv.balance)], [late > 0 ? 'Was due' : 'Due by', fmt_(inv.dueDate, 'MMM d, yyyy')]]) +
+    howToPay_(s) + '<p>If you already paid, thank you, and please ignore this.</p>' + signoff_(s);
+  sendClientEmail_(inv.email, 'Friendly reminder: Invoice #' + inv.id + ' (' + money_(inv.balance) + ')', body, s, [getInvoicePdf_(inv, s).getBlob()]);
+}
+
+/** Like sendClientEmail_ but with extra inline images (the strip photo) alongside the logo. */
+function sendClientEmailWithImages_(to, subject, innerHtml, s, images) {
+  const logo = findAsset_(LOGO_FILE_NAME);
+  const inline = Object.assign({}, images || {});
+  if (logo) inline.logo = logo;
+  MailApp.sendEmail({
+    to: to, bcc: ownerEmail_(s), replyTo: ownerEmail_(s), name: String(s.BUSINESS_NAME), subject: subject,
+    htmlBody: emailShell_(innerHtml, s, !!logo),
+    inlineImages: Object.keys(inline).length ? inline : undefined,
   });
 }
 

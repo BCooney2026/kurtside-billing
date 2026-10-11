@@ -252,6 +252,16 @@
   .sysgrid div { padding: 9px 0; border-bottom: 1px solid var(--line-soft); font-size: 13px; }
   .sysgrid div span { display: block; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; margin-bottom: 2px; }
 
+  .sendgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .sendbtn { text-align: left; border: 1px solid var(--line); background: linear-gradient(180deg, var(--card-hi), var(--card)); border-radius: 16px; padding: 14px; cursor: pointer; }
+  .sendbtn b { display: block; font-size: 15px; margin-bottom: 3px; }
+  .sendbtn span { font-size: 12px; color: var(--muted); }
+  .sendbtn .em { font-size: 20px; display: block; margin-bottom: 6px; }
+  .pick { display: flex; align-items: flex-start; gap: 12px; padding: 12px 2px; border-bottom: 1px solid var(--line-soft); cursor: pointer; }
+  .pick:last-child { border-bottom: 0; }
+  .pick input { width: 22px; height: 22px; accent-color: var(--gold); flex: none; margin-top: 1px; }
+  .pick.off { opacity: .45; cursor: default; }
+
   .tagline { text-align: center; margin: 28px 0 8px; font-family: var(--display); font-size: 11px; letter-spacing: 3px; color: rgba(227,189,106,.55); }
 </style>
 </head>
@@ -874,6 +884,11 @@
         ? `<ul class="heads">${heads.map(([st, t]) => `<li><span class="ic ${st}">${ICON[st]}</span><span>${t}</span></li>`).join('')}</ul>`
         : `<ul class="heads"><li><span class="ic good">${ICON.good}</span><span>All clear. Nothing needs you right now.</span></li></ul>`}</div>
 
+      <div class="lbl">Send to clients</div>
+      <div class="sendgrid">
+        ${Object.keys(SEND_TYPES).map(k => `<button class="sendbtn" onclick="openSend('${k}')"><span class="em">${SEND_TYPES[k].icon}</span><b>${SEND_TYPES[k].title}</b><span>${SEND_TYPES[k].blurb}</span></button>`).join('')}
+      </div>
+
       <div class="lbl">Money</div>
       <div class="tiles">
         <div class="tile wide"><div class="k">Owed to you</div><div class="v money-big" style="font-size:34px">${money(m.owed)}</div>
@@ -931,6 +946,87 @@
         <div><span>Emails this month</span>${plural(sy.invoicesEmailed, 'invoice')} &middot; ${plural(sy.receiptsEmailed, 'receipt')} &middot; ${plural(sy.reportsEmailed, 'report')}</div>
         <div><span>Strip reader</span>${sy.stripReader ? `${sy.stripReads} read${sy.stripReads === 1 ? '' : 's'} &middot; ~$${sy.stripCost.toFixed(sy.stripCost < 0.01 ? 4 : 2)}` : 'Off'}</div>
       </div></div>`;
+  }
+
+  // ----- Send to clients (Dash) -----
+  // Two passes per send: preview (who gets what, all eligible pre-checked) then send.
+  const SEND_TYPES = {
+    invoices: { icon: '&#129534;', title: 'Bill now', blurb: 'Invoice all unbilled work', verb: 'Create', noun: 'invoice' },
+    reminders: { icon: '&#128276;', title: 'Payment reminder', blurb: 'Nudge open balances', verb: 'Send', noun: 'reminder' },
+    reports: { icon: '&#128167;', title: 'Pool reports', blurb: 'Latest water test to owners', verb: 'Send', noun: 'report' },
+    announce: { icon: '&#128227;', title: 'Announcement', blurb: 'Your own message', verb: 'Send', noun: 'email' },
+  };
+
+  async function openSend(type) {
+    if (S.busy) return;
+    setBusy(true, 'Checking who gets it...');
+    let res;
+    try { res = await call('emailCenter', { type, mode: 'preview' }); }
+    catch (e) { setBusy(false); if (!(e && e.message === 'WRONG_PIN')) toast((e && e.message) || String(e), true); return; }
+    setBusy(false);
+    const T = SEND_TYPES[type];
+    S.send = { type, rows: res.rows };
+    const empty = {
+      invoices: 'Nothing unbilled right now. Log some work first.',
+      reminders: 'Nobody owes you anything. Nice.',
+      reports: 'No water tests saved yet.',
+      announce: 'No clients yet.',
+    }[type];
+    openSheet(`
+      <h3>${T.title}</h3>
+      ${type === 'invoices' ? '<div class="muted" style="margin:-6px 0 10px">Invoices everything logged through today. Clients without email still get an invoice; you hand them the PDF.</div>' : ''}
+      ${type === 'announce' ? `
+        <label class="field"><span>Subject</span><input class="input" id="anSubject" placeholder="Pool closings start next week"></label>
+        <label class="field"><span>Message</span><textarea class="input" id="anMessage" style="min-height:130px" placeholder="Hi! I'm scheduling closings for the next two weeks. Reply with a day that works for you."></textarea></label>
+        <div class="muted" style="margin:-6px 2px 10px">Starts with "Hi (first name)," and ends with your name, so just write the middle.</div>` : ''}
+      <div class="card list" style="padding:4px 14px">
+        ${res.rows.length ? res.rows.map(r => `
+          <label class="pick ${r.eligible ? '' : 'off'}">
+            <input type="checkbox" value="${esc(r.id)}" ${r.eligible ? 'checked' : 'disabled'} onchange="updateSendBtn()">
+            <div class="grow"><div style="font-weight:700">${esc(r.name)}</div><div class="muted">${esc(r.detail)}</div></div>
+          </label>`).join('') : `<div class="empty">${empty}</div>`}
+      </div>
+      <div class="row" style="margin-top:14px">
+        <button class="btn ghost grow" onclick="closeSheet()">Cancel</button>
+        <button class="btn gold grow" id="sendBtn" onclick="sendNow()"></button>
+      </div>`);
+    updateSendBtn();
+  }
+
+  function pickedIds() { return [...document.querySelectorAll('#sheet .pick input:checked')].map(i => i.value); }
+
+  function updateSendBtn() {
+    const n = pickedIds().length, T = SEND_TYPES[S.send.type];
+    $('sendBtn').disabled = !n;
+    $('sendBtn').textContent = n ? `${T.verb} ${n} ${T.noun}${n === 1 ? '' : 's'}` : 'Nobody selected';
+  }
+
+  async function sendNow() {
+    const ids = pickedIds(), T = SEND_TYPES[S.send.type];
+    const payload = { type: S.send.type, mode: 'send', ids };
+    if (S.send.type === 'announce') {
+      payload.subject = $('anSubject').value.trim();
+      payload.message = $('anMessage').value.trim();
+      if (!payload.subject || !payload.message) { toast('Add a subject and a message.', true); return; }
+    }
+    if (!ids.length) return;
+    if (!confirm(`${T.verb} ${ids.length} ${T.noun}${ids.length === 1 ? '' : 's'} now? This goes straight to your clients.`)) return;
+    setBusy(true, 'Sending...');
+    try {
+      const res = await call('emailCenter', payload);
+      if (res && res.clients) { S.data = res; render(); }
+      const r = res.sendResult || { done: [], failed: [] };
+      closeSheet();
+      let msg = `Done: ${r.done.length} ${T.noun}${r.done.length === 1 ? '' : 's'}`;
+      if (r.handOver) msg += ` (${r.handOver} to hand over)`;
+      if (r.failed.length) msg += `. Failed: ${r.failed.join(', ')}`;
+      toast(msg, !!r.failed.length);
+      loadDash();
+    } catch (e) {
+      if (!(e && e.message === 'WRONG_PIN')) toast((e && e.message) || String(e), true);
+    } finally {
+      setBusy(false);
+    }
   }
 
   // ----- Money tab -----
