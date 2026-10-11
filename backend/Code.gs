@@ -134,14 +134,41 @@ const DEFAULT_SETTINGS = [
   ['TEST_PHOTO_FOLDER_ID', '', 'Set by setup(). Drive folder that holds test strip photos'],
 ];
 
-/** Starting price list. CLOSING is 0 on purpose: the app will not log it until a price is set. */
+/**
+ * Starting price list, taken from Tommy's own paper invoices. Extras are ordered by how often he
+ * charges them (Backwash and Extra Pump about 5x a season, Water Line at every open and close).
+ */
 const DEFAULT_PRICES = [
   ['VISIT', 'Weekly Service Visit', 40, 'Service', true, 1],
   ['OPENING', 'Pool Opening and Clean', 300, 'Service', true, 2],
-  ['CLOSING', 'Pool Closing', 0, 'Service', true, 3],
-  ['EXTRA_PUMP', 'Extra Pump', 40, 'Extra', true, 10],
-  ['NEW_FILTER', 'Install New Filter', 50, 'Extra', true, 11],
+  ['CLOSING', 'Pool Closing', 300, 'Service', true, 3],
+  ['BACKWASH', 'Backwash Filter and Recharge', 30, 'Extra', true, 9],
+  ['EXTRA_PUMP', 'Extra Pump', 50, 'Extra', true, 10],
+  ['WATER_LINE', 'Water Line', 50, 'Extra', true, 11],
+  ['NEW_FILTER', 'Install New Filter', 50, 'Extra', true, 20],
 ];
+
+/**
+ * One-time price update for sheets created before Oct 11, 2026 (runs from setup, then never again,
+ * so prices Tommy changes later are never overwritten). Adds missing default items, and moves the
+ * prices that went up on Tommy's invoices: Extra Pump 40 -> 50, Pool Closing 0 -> 300.
+ */
+const PRICE_UPDATE_KEY = 'PRICE_UPDATE_2026_10';
+function updatePricesOnce_() {
+  const props = PropertiesService.getScriptProperties();
+  if (props.getProperty(PRICE_UPDATE_KEY)) return;
+  const rows = indexBy_(readTable_(SHEETS.prices), 'id');
+  DEFAULT_PRICES.forEach(([id, name, price, kind, active, sort]) => {
+    const row = rows[id];
+    if (!row) { appendRow_(SHEETS.prices, { id, name, price, kind, active, sort }); return; }
+    const changes = { sort };
+    if (id === 'EXTRA_PUMP' && Number(row.price) === 40) changes.price = 50;
+    if (id === 'CLOSING' && !(Number(row.price) > 0)) changes.price = 300;
+    updateRow_(SHEETS.prices, row._row, changes);
+  });
+  props.setProperty(PRICE_UPDATE_KEY, new Date().toISOString());
+  console.log('Price list updated: Backwash $30 and Water Line $50 added, Extra Pump $50, Pool Closing $300.');
+}
 
 /**
  * Starting clients (seeded only when the Clients tab is empty). Kept empty on purpose:
@@ -196,6 +223,9 @@ function setup() {
   if (readTable_(SHEETS.prices).length === 0) {
     DEFAULT_PRICES.forEach(([id, name, price, kind, active, sort]) =>
       appendRow_(SHEETS.prices, { id, name, price, kind, active, sort }));
+    PropertiesService.getScriptProperties().setProperty(PRICE_UPDATE_KEY, new Date().toISOString());
+  } else {
+    updatePricesOnce_();
   }
 
   if (readTable_(SHEETS.clients).length === 0) {
