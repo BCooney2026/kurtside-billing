@@ -526,10 +526,10 @@
         </div>` : ''}
       ${S.credit ? `
         <div class="card" style="margin-top:12px">
-          <label class="field"><span>Credit for</span>
+          <label class="field"><span>Amount off</span>
+            <input class="input" id="creditPrice" type="number" inputmode="decimal" step="0.01" min="0" value="${esc(S.credit.price)}" placeholder="$ off" oninput="S.credit.price = this.value; updateLogButton()"></label>
+          <label class="field" style="margin:0"><span>Why? (optional)</span>
             <input class="input" id="creditDesc" value="${esc(S.credit.description)}" placeholder="Discount, trade, overpayment..." oninput="S.credit.description = this.value"></label>
-          <label class="field" style="margin:0"><span>Amount off</span>
-            <input class="input" id="creditPrice" type="number" inputmode="decimal" step="0.01" min="0" value="${esc(S.credit.price)}" placeholder="0.00" oninput="S.credit.price = this.value; updateLogButton()"></label>
           <div class="muted" style="margin-top:8px">Comes off this client's next bill.</div>
         </div>` : ''}
 
@@ -650,7 +650,7 @@
   function toggleCredit() {
     S.credit = S.credit ? null : { description: '', price: '' };
     renderLog();
-    if (S.credit) $('creditDesc').focus();
+    if (S.credit) $('creditPrice').focus();
   }
 
   function toggleCustom() {
