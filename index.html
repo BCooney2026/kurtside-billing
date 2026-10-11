@@ -880,8 +880,10 @@
     const hi = (hr < 12 ? 'Morning' : hr < 17 ? 'Afternoon' : 'Evening') + (D.owner ? ', ' + esc(D.owner) : '');
     const heads = headsUp(D);
     const maxTop = Math.max(1, ...m.topClients.map(c => c.amount));
-    // Client Accounts keeps to weekly pools plus anyone with money in motion; the rest live under Openings & Closings.
-    const active = w.accounts.filter(a => a.weekly || a.unbilledCount || a.openCount);
+    // Open Balances: only clients who owe money, meaning unbilled work or an unpaid invoice.
+    // Everyone else is still reachable under Openings & Closings.
+    const active = w.accounts.filter(a => a.unbilledCount || a.openCount)
+      .sort((a, b) => (b.late - a.late) || ((b.unbilled + b.open) - (a.unbilled + a.open)));
     const quiet = w.accounts.length - active.length;
 
     $('tab-dash').innerHTML = `
@@ -931,10 +933,10 @@
         <div class="tile"><div class="k">Visits this week</div><div class="v">${w.visitsThisWeek}</div><div class="s">last 7 days</div></div>
         <div class="tile"><div class="k">Jobs this month</div><div class="v">${w.jobsThisMonth}</div><div class="s">everything logged</div></div>
       </div>
-      <div class="card list" style="margin-top:10px"><div style="font-weight:800;margin-bottom:2px">Client Accounts</div>
-        <div class="muted" style="margin-bottom:4px">Tap a client to bill, record payments, or see history.</div>
-        ${active.length ? active.map(acctRow).join('') : '<div class="empty">No clients yet.</div>'}
-        ${quiet ? `<div class="muted" style="margin-top:8px;font-size:12px">${quiet} open/close client${quiet === 1 ? '' : 's'} with nothing to bill are under Openings &amp; Closings.</div>` : ''}
+      <div class="card list" style="margin-top:10px"><div style="font-weight:800;margin-bottom:2px">Open Balances</div>
+        <div class="muted" style="margin-bottom:4px">Unbilled work and unpaid invoices. Tap to bill or record a payment.</div>
+        ${active.length ? active.map(acctRow).join('') : '<div class="empty">Nobody owes you anything. Nice.</div>'}
+        ${quiet ? `<div class="muted" style="margin-top:8px;font-size:12px">${quiet} paid-up client${quiet === 1 ? ' is' : 's are'} under Openings &amp; Closings below.</div>` : ''}
       </div>
       <details class="season card">
         <summary class="row"><div class="grow"><div style="font-weight:800">Openings &amp; Closings</div>
@@ -968,8 +970,8 @@
     const money1 = [a.unbilledCount ? `${whole(a.unbilled)} unbilled` : '', a.openCount ? `${whole(a.open)} open` : ''].filter(Boolean).join(' &middot; ');
     const visit = a.weekly ? (a.daysSince === null ? 'No visit logged yet' : 'Last visit ' + ago(a.daysSince)) : 'Openings & closings';
     const badge = a.late ? `<span class="stlabel fix">${ICON.fix} Late</span>`
-      : a.weekly ? `<span class="stlabel ${a.overdue ? 'watch' : 'good'}">${a.overdue ? ICON.watch + ' Due' : ICON.good + ' On track'}</span>`
-      : (a.unbilledCount ? '<span class="stlabel watch">To bill</span>' : '');
+      : a.unbilledCount ? '<span class="stlabel watch">To bill</span>'
+      : '<span class="stlabel none">Billed</span>';
     return `<div class="item row acct" onclick="openAccount('${esc(a.id)}')">
       <div class="grow"><div style="font-weight:700">${esc(a.name)}${a.biweekly ? ' <span class="muted">(biweekly)</span>' : ''}</div>
         <div class="muted">${visit}${money1 ? ' &middot; ' + money1 : ''}</div></div>
