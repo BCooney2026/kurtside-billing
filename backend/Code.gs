@@ -5,12 +5,15 @@
  * Tommy logs work from his iPhone right after each job.
  * This script turns that log into monthly invoices, emails
  * them, chases late payments, and records cash/check payments.
+ * It also reads photos of pool test strips with Claude (vision)
+ * and keeps a water chemistry history per client.
  *
  * LAYOUT (standalone script, same pattern as the Cooney Apps folders)
  *   <Drive folder>/
  *     Kurtside Billing         This Apps Script project
  *     Kurtside Billing Data    The Google Sheet (created by setup)
  *     Kurtside Invoices/       Invoice PDFs (created by setup)
+ *     Kurtside Test Photos/    Test strip photos (created by setup)
  *   Logo.png (badge for invoices and emails) can sit in this folder or any
  *   parent folder above it.
  *
@@ -27,6 +30,12 @@
  *   Put this script in its Drive folder, then run setup() from the editor.
  *   setup() finds or creates the data sheet next to the script and remembers
  *   its ID in Script Properties (SPREADSHEET_ID). Safe to run again any time.
+ *
+ * TEST STRIP READING (Claude vision)
+ *   Needs an Anthropic API key in Script Properties as ANTHROPIC_API_KEY
+ *   (Project Settings > Script Properties). The key never goes in this file
+ *   or the sheet. Without it, the app still lets Tommy type readings by hand.
+ *   Cost is a fraction of a cent per photo; STRIP_DAILY_LIMIT caps runaway use.
  *
  * DEPLOYMENT
  *   Web app, Execute as: Me, Who has access: Anyone. After changing this file,
@@ -56,6 +65,30 @@ const DATA_FILE_NAME = 'Kurtside Billing Data';
 const PDF_FOLDER_NAME = 'Kurtside Invoices';
 const PROP_SPREADSHEET_ID = 'SPREADSHEET_ID';
 const LOGO_FILE_NAME = 'Logo.png';
+const PHOTO_FOLDER_NAME = 'Kurtside Test Photos';
+
+// Test strip reading
+const PROP_API_KEY = 'ANTHROPIC_API_KEY';      // Script Properties key holding the Anthropic API key
+const VISION_MODEL = 'claude-haiku-5-5';       // cheapest current Claude model with vision
+const ANTHROPIC_URL = 'https://api.anthropic.com/v1/messages';
+const STRIP_DAILY_LIMIT = 40;                  // max AI strip reads per day (cost guard)
+
+/**
+ * Water chemistry targets for a chlorine residential pool. One source of truth: the app colors
+ * readings with these and the Pool Report email uses them too.
+ *   ideal = green, ok = yellow, outside ok = red.
+ * Total chlorine has no range of its own: it is judged by combined chlorine (TC minus FC),
+ * green at 0.5 or less, yellow up to 1, red above.
+ */
+const TARGETS = [
+  { key: 'fc', label: 'Free Chlorine', short: 'FC', unit: 'ppm', ideal: [2, 4], ok: [1, 5] },
+  { key: 'tc', label: 'Total Chlorine', short: 'TC', unit: 'ppm', combined: true },
+  { key: 'ph', label: 'pH', short: 'pH', unit: '', ideal: [7.4, 7.6], ok: [7.2, 7.8] },
+  { key: 'ta', label: 'Alkalinity', short: 'TA', unit: 'ppm', ideal: [80, 120], ok: [60, 150] },
+  { key: 'ch', label: 'Hardness', short: 'CH', unit: 'ppm', ideal: [200, 400], ok: [150, 500] },
+  { key: 'cya', label: 'Stabilizer (CYA)', short: 'CYA', unit: 'ppm', ideal: [30, 50], ok: [20, 80] },
+];
+const READING_KEYS = TARGETS.map(t => t.key);
 
 /** Every tab, with [codeKey, Header Label] for each column, in order. */
 const SHEETS = {
@@ -65,6 +98,7 @@ const SHEETS = {
   work: { name: 'Work Log', cols: [['id', 'Entry ID'], ['date', 'Date'], ['clientId', 'Client ID'], ['clientName', 'Client'], ['itemId', 'Item ID'], ['description', 'Description'], ['qty', 'Qty'], ['unitPrice', 'Unit Price'], ['amount', 'Amount'], ['note', 'Note'], ['invoiceId', 'Invoice #'], ['voided', 'Voided'], ['loggedAt', 'Logged At']] },
   invoices: { name: 'Invoices', cols: [['id', 'Invoice #'], ['clientId', 'Client ID'], ['clientName', 'Client'], ['email', 'Email'], ['invoiceDate', 'Invoice Date'], ['dueDate', 'Due Date'], ['total', 'Total'], ['paid', 'Paid'], ['balance', 'Balance'], ['status', 'Status'], ['sentAt', 'Emailed At'], ['reminderLevel', 'Reminders Sent'], ['pdfId', 'PDF File ID']] },
   payments: { name: 'Payments', cols: [['id', 'Payment ID'], ['date', 'Date'], ['invoiceId', 'Invoice #'], ['clientId', 'Client ID'], ['clientName', 'Client'], ['amount', 'Amount'], ['method', 'Method'], ['checkNo', 'Check #'], ['note', 'Note'], ['receiptSentAt', 'Receipt Emailed At']] },
+  readings: { name: 'Readings', cols: [['id', 'Reading ID'], ['date', 'Date'], ['clientId', 'Client ID'], ['clientName', 'Client'], ['fc', 'Free Cl'], ['tc', 'Total Cl'], ['ph', 'pH'], ['ta', 'Alkalinity'], ['ch', 'Hardness'], ['cya', 'CYA'], ['ai', 'AI Read'], ['photoId', 'Photo File ID'], ['note', 'Note'], ['loggedAt', 'Logged At'], ['reportSentAt', 'Report Emailed At']] },
 };
 
 const CLIENT_TYPES = ['Weekly', 'Open/Close'];
@@ -72,7 +106,7 @@ const PRICE_KINDS = ['Service', 'Extra'];
 const PAY_METHODS = ['Cash', 'Check'];
 
 /** Settings Tommy can change from the app. Everything else is sheet-only. */
-const EDITABLE_SETTINGS = ['BUSINESS_NAME', 'OWNER_NAME', 'BUSINESS_EMAIL', 'BUSINESS_PHONE', 'CHECKS_PAYABLE_TO', 'MAILING_ADDRESS', 'TERMS_DAYS', 'AUTOMATION_PAUSED'];
+const EDITABLE_SETTINGS = ['BUSINESS_NAME', 'OWNER_NAME', 'BUSINESS_EMAIL', 'BUSINESS_PHONE', 'CHECKS_PAYABLE_TO', 'MAILING_ADDRESS', 'TERMS_DAYS', 'AUTOMATION_PAUSED', 'REPORT_EMAIL'];
 
 const DEFAULT_SETTINGS = [
   ['BUSINESS_NAME', 'Kurtside Pool Co.', 'Shown on invoices and emails'],
@@ -89,6 +123,8 @@ const DEFAULT_SETTINGS = [
   ['INVOICE_FOLDER_ID', '', 'Set by setup(). Drive folder that holds invoice PDFs'],
   ['NEXT_INVOICE_NUMBER', '1001', 'Next invoice number. Never lower it'],
   ['APP_PIN', '', 'PIN to open the app. setup() fills in a random 6 digits; change it here any time'],
+  ['REPORT_EMAIL', '', 'Pool Report email after each water test goes here. Blank = no report emails'],
+  ['TEST_PHOTO_FOLDER_ID', '', 'Set by setup(). Drive folder that holds test strip photos'],
 ];
 
 /** Starting price list. CLOSING is 0 on purpose: the app will not log it until a price is set. */
@@ -117,6 +153,7 @@ const COLUMN_FORMATS = [
   ['invoices', 'invoiceDate', 'date'], ['invoices', 'dueDate', 'date'], ['invoices', 'total', 'money'],
   ['invoices', 'paid', 'money'], ['invoices', 'balance', 'money'], ['invoices', 'sentAt', 'stamp'],
   ['payments', 'date', 'date'], ['payments', 'amount', 'money'], ['payments', 'checkNo', 'text'], ['payments', 'receiptSentAt', 'stamp'],
+  ['readings', 'date', 'date'], ['readings', 'loggedAt', 'stamp'], ['readings', 'reportSentAt', 'stamp'],
 ];
 const CHECKBOX_COLUMNS = [['prices', 'active'], ['clients', 'active'], ['work', 'voided']];
 const LIST_COLUMNS = [['prices', 'kind', PRICE_KINDS], ['clients', 'type', CLIENT_TYPES], ['payments', 'method', PAY_METHODS]];
@@ -167,13 +204,19 @@ function setup() {
   if (!settings.INVOICE_FOLDER_ID) {
     setSetting_('INVOICE_FOLDER_ID', scriptFolder_().createFolder(PDF_FOLDER_NAME).getId());
   }
+  if (!settings.TEST_PHOTO_FOLDER_ID) {
+    setSetting_('TEST_PHOTO_FOLDER_ID', scriptFolder_().createFolder(PHOTO_FOLDER_NAME).getId());
+  }
 
   ScriptApp.getProjectTriggers()
     .filter(t => t.getHandlerFunction() === 'dailyJob')
     .forEach(t => ScriptApp.deleteTrigger(t));
   ScriptApp.newTrigger('dailyJob').timeBased().everyDays(1).atHour(7).create();
 
+  const hasKey = !!PropertiesService.getScriptProperties().getProperty(PROP_API_KEY);
   console.log('Setup complete. Daily automation is on. App PIN: ' + getSettings_().APP_PIN + '. Data sheet: ' + ss.getUrl());
+  console.log(hasKey ? 'Test strip reading: ON (API key found).'
+    : 'Test strip reading: OFF until you add ' + PROP_API_KEY + ' in Project Settings > Script Properties.');
 }
 
 /**
@@ -366,6 +409,7 @@ function api(pin, action, payload) {
     bootstrap: bootstrap_, logWork: logWork_, voidWork: voidWork_,
     recordPayment: recordPayment_, resendInvoice: resendInvoice_,
     saveClient: saveClient_, savePrice: savePrice_, saveSettings: saveSettings_,
+    readStrip: readStrip_, saveReading: saveReading_,
   };
   const handler = handlers[action];
   if (!handler) throw new Error('Unknown action: ' + action);
@@ -423,6 +467,9 @@ function bootstrap_() {
     unbilledCount: unbilled.length,
     openInvoices: invoices.filter(i => i.status === 'Open'),
     paidInvoices: invoices.filter(i => i.status === 'Paid').slice(-10).reverse(),
+    targets: TARGETS,
+    readings: readingsByClient_(12),
+    stripReader: !!PropertiesService.getScriptProperties().getProperty(PROP_API_KEY),
   };
 }
 
@@ -603,9 +650,11 @@ function saveSettings_(obj) {
         if (!(value >= 0 && value <= 90)) throw new Error('Terms must be 0 to 90 days.');
       } else if (key === 'AUTOMATION_PAUSED') {
         value = value === true ? 'TRUE' : 'FALSE';
-      } else if (key === 'BUSINESS_EMAIL') {
+      } else if (key === 'BUSINESS_EMAIL' || key === 'REPORT_EMAIL') {
         value = String(value || '').trim();
-        if (value && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value)) throw new Error('Business email does not look right.');
+        if (value && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(value)) {
+          throw new Error((key === 'REPORT_EMAIL' ? 'Pool report' : 'Business') + ' email does not look right.');
+        }
       } else {
         value = String(value || '').trim();
       }
@@ -613,6 +662,203 @@ function saveSettings_(obj) {
       setSetting_(key, String(value));
     });
     return bootstrap_();
+  });
+}
+
+// ============================================================
+// Water tests (test strip photos read by Claude)
+// Flow: the app sends a photo -> readStrip_ saves it to Drive and asks Claude for the
+// numbers -> Tommy checks or fixes them in the app -> saveReading_ writes the row and
+// emails the Pool Report. Nothing is saved to Readings until Tommy taps Save.
+// ============================================================
+
+/** p = { clientId, image: base64 JPEG (no data: prefix) }. Returns { photoId, readings, notes, found }. */
+function readStrip_(p) {
+  const client = findById_(SHEETS.clients, p && p.clientId);
+  if (!client) throw new Error('Pick a client first.');
+  const b64 = String((p && p.image) || '');
+  if (b64.length < 1000) throw new Error('That photo did not come through. Try again.');
+
+  const key = PropertiesService.getScriptProperties().getProperty(PROP_API_KEY);
+  if (!key) throw new Error('Strip reading is not set up yet. Type the numbers by hand for now.');
+  countStripRead_();
+
+  const s = getSettings_();
+  const name = fmt_(new Date(), 'yyyy-MM-dd HHmm') + ' ' + String(client.name) + '.jpg';
+  const photo = DriveApp.getFolderById(s.TEST_PHOTO_FOLDER_ID)
+    .createFile(Utilities.newBlob(Utilities.base64Decode(b64), 'image/jpeg', name));
+
+  const result = askClaudeForStrip_(b64, key);
+  return { photoId: photo.getId(), readings: result.readings, notes: result.notes, found: result.found };
+}
+
+/** Throws once today's AI reads hit STRIP_DAILY_LIMIT. A runaway loop can never run up a bill. */
+function countStripRead_() {
+  const cache = CacheService.getScriptCache();
+  const k = 'stripReads_' + fmt_(new Date(), 'yyyyMMdd');
+  const n = Number(cache.get(k)) || 0;
+  if (n >= STRIP_DAILY_LIMIT) throw new Error('Daily strip-reading limit reached. Type the numbers by hand.');
+  cache.put(k, String(n + 1), 21600);
+}
+
+/** Sends the photo to Claude and returns { readings: {fc,tc,ph,ta,ch,cya}, notes, found }. */
+function askClaudeForStrip_(b64, apiKey) {
+  const prompt = [
+    'This photo shows a swimming pool test strip held next to the color chart printed on its bottle.',
+    'Compare each pad on the strip to the matching row of the chart in the SAME photo (same lighting) and report the value printed on the chart.',
+    'If a pad falls between two chart blocks, use the value halfway between them.',
+    'Report these, in ppm except pH:',
+    '  fc = free chlorine, tc = total chlorine, ph = pH, ta = total alkalinity,',
+    '  ch = total or calcium hardness, cya = cyanuric acid / stabilizer.',
+    'Use null for any value the strip does not test or that you cannot read with confidence. Ignore bromine.',
+    'Reply with ONLY this JSON, no other text:',
+    '{"found": true, "readings": {"fc": 3, "tc": 3, "ph": 7.5, "ta": 100, "ch": 250, "cya": 40}, "notes": "one short sentence about anything uncertain"}',
+    'Set "found" to false if there is no test strip or no color chart in the photo.',
+  ].join('\n');
+
+  const res = UrlFetchApp.fetch(ANTHROPIC_URL, {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+    muteHttpExceptions: true,
+    payload: JSON.stringify({
+      model: VISION_MODEL,
+      max_tokens: 300,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: b64 } },
+          { type: 'text', text: prompt },
+        ],
+      }],
+    }),
+  });
+
+  const code = res.getResponseCode();
+  let body = {};
+  try { body = JSON.parse(res.getContentText()); } catch (e) { /* handled below */ }
+  if (code !== 200) {
+    const msg = String((body.error && body.error.message) || res.getContentText()).slice(0, 300);
+    console.error('Claude strip read failed (' + code + '): ' + msg);
+    if (code === 401) throw new Error('Strip reader API key is wrong. Type the numbers by hand.');
+    if (/credit/i.test(msg)) throw new Error('Strip reader is out of credit. Type the numbers by hand.');
+    throw new Error('Could not read the strip right now. Type the numbers by hand.');
+  }
+
+  const text = (body.content || []).filter(c => c.type === 'text').map(c => c.text).join('');
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  let parsed;
+  try { parsed = JSON.parse(text.slice(start, end + 1)); } catch (e) {
+    console.error('Unreadable strip reply: ' + text);
+    throw new Error('Could not read the strip. Try another photo or type the numbers.');
+  }
+  const readings = {};
+  READING_KEYS.forEach(k => { readings[k] = cleanReading_(parsed.readings && parsed.readings[k]); });
+  return { readings, notes: String(parsed.notes || '').slice(0, 200), found: parsed.found !== false };
+}
+
+/** Number, or '' for blank / not tested / nonsense. */
+function cleanReading_(v) {
+  if (v === null || v === undefined || String(v).trim() === '') return '';
+  const n = Number(v);
+  return isFinite(n) && n >= 0 && n < 10000 ? Math.round(n * 100) / 100 : '';
+}
+
+/** p = { clientId, date:'yyyy-MM-dd', readings:{fc..cya}, ai:{fc..cya} | null, photoId, note } */
+function saveReading_(p) {
+  return withLock_(() => {
+    const client = findById_(SHEETS.clients, p.clientId);
+    if (!client) throw new Error('Pick a client first.');
+    const date = parseYmd_(p.date);
+    if (stripTime_(date) > stripTime_(new Date())) throw new Error('That date is in the future.');
+
+    const row = {
+      id: newId_('R'), date, clientId: String(client.id), clientName: String(client.name),
+      ai: p.ai ? JSON.stringify(p.ai) : '', photoId: String(p.photoId || ''),
+      note: String(p.note || '').trim(), loggedAt: new Date(), reportSentAt: '',
+    };
+    READING_KEYS.forEach(k => { row[k] = cleanReading_(p.readings && p.readings[k]); });
+    if (!READING_KEYS.some(k => row[k] !== '')) throw new Error('Enter at least one reading.');
+
+    const s = getSettings_();
+    if (String(s.REPORT_EMAIL || '').trim()) {
+      safely_('pool report ' + row.id, () => {
+        sendPoolReport_(row, p.ai || null, s);
+        row.reportSentAt = new Date();
+      });
+    }
+    appendRow_(SHEETS.readings, row);
+    return bootstrap_();
+  });
+}
+
+/** Last n readings per client, newest first: { clientId: [{id,date,fc,...,photo}] }. */
+function readingsByClient_(n) {
+  const out = {};
+  readTable_(SHEETS.readings)
+    .filter(r => r.date instanceof Date)
+    .sort((a, b) => b.date - a.date || b.loggedAt - a.loggedAt)
+    .forEach(r => {
+      const list = out[String(r.clientId)] = out[String(r.clientId)] || [];
+      if (list.length >= n) return;
+      const o = { id: String(r.id), date: ymd_(r.date), photo: !!String(r.photoId || '').trim(), note: String(r.note || '') };
+      READING_KEYS.forEach(k => { o[k] = r[k] === '' ? '' : Number(r[k]); });
+      list.push(o);
+    });
+  return out;
+}
+
+/** 'good' | 'watch' | 'fix' | '' for one reading, using TARGETS. */
+function readingStatus_(key, values) {
+  const t = TARGETS.find(x => x.key === key);
+  const v = values[key];
+  if (!t || v === '' || v === null || v === undefined) return '';
+  if (t.combined) {
+    if (values.fc === '' || values.fc === null || values.fc === undefined) return '';
+    const cc = Number(v) - Number(values.fc);
+    return cc <= 0.5 ? 'good' : cc <= 1 ? 'watch' : 'fix';
+  }
+  if (v >= t.ideal[0] && v <= t.ideal[1]) return 'good';
+  if (v >= t.ok[0] && v <= t.ok[1]) return 'watch';
+  return 'fix';
+}
+
+/** Pool Report to REPORT_EMAIL: color-coded readings, the strip photo, and any AI-vs-Tommy differences. */
+function sendPoolReport_(row, ai, s) {
+  const colors = { good: '#1f9d63', watch: '#c98a12', fix: '#d64545', '': '#5b6b7b' };
+  const words = { good: 'Good', watch: 'Watch', fix: 'Adjust', '': '' };
+  const rows = TARGETS.map(t => {
+    const v = row[t.key];
+    const st = readingStatus_(t.key, row);
+    const range = t.combined ? 'TC - FC under 0.5' : t.ideal[0] + ' to ' + t.ideal[1];
+    const aiVal = ai ? cleanReading_(ai[t.key]) : '';
+    const changed = ai && String(aiVal) !== String(v)
+      ? '<br><span style="font-size:12px;color:#5b6b7b">AI read ' + (aiVal === '' ? 'blank' : aiVal) + '</span>' : '';
+    return '<tr>' +
+      '<td style="padding:8px;border-bottom:1px solid #e3e8ee">' + esc_(t.label) + '</td>' +
+      '<td style="padding:8px;border-bottom:1px solid #e3e8ee;text-align:right"><b>' + (v === '' ? '-' : esc_(v) + (t.unit ? ' ' + t.unit : '')) + '</b>' + changed + '</td>' +
+      '<td style="padding:8px;border-bottom:1px solid #e3e8ee;color:' + colors[st] + '"><b>' + words[st] + '</b></td>' +
+      '<td style="padding:8px;border-bottom:1px solid #e3e8ee;color:#5b6b7b;font-size:12px">' + esc_(range) + '</td></tr>';
+  }).join('');
+
+  let photo = null;
+  if (row.photoId) { try { photo = DriveApp.getFileById(row.photoId).getBlob(); } catch (e) { console.warn('Photo missing: ' + row.photoId); } }
+
+  const body = '<p style="font-size:18px;margin:0 0 4px"><b>' + esc_(row.clientName) + '</b></p>' +
+    '<p style="margin:0 0 12px;color:#5b6b7b">Water test, ' + fmt_(row.date, 'EEEE, MMM d, yyyy') + '</p>' +
+    '<table style="width:100%;border-collapse:collapse;font-size:14px">' +
+    '<tr style="background:#0b1f33;color:#fff"><th style="padding:8px;text-align:left">Test</th><th style="padding:8px;text-align:right">Reading</th><th style="padding:8px;text-align:left">Status</th><th style="padding:8px;text-align:left">Target</th></tr>' +
+    rows + '</table>' +
+    (row.note ? '<p><b>Note:</b> ' + esc_(row.note) + '</p>' : '') +
+    (photo ? '<p style="margin-top:16px"><img src="cid:strip" alt="Test strip photo" style="width:100%;max-width:520px;border-radius:8px"></p>' : '');
+
+  MailApp.sendEmail({
+    to: String(s.REPORT_EMAIL).trim(),
+    name: String(s.BUSINESS_NAME),
+    subject: 'Pool Report: ' + row.clientName + ', ' + fmt_(row.date, 'MMM d'),
+    htmlBody: emailShell_(body, s, false),
+    inlineImages: photo ? { strip: photo } : undefined,
   });
 }
 

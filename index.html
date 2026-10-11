@@ -5,6 +5,9 @@
     Log       Pick a client, tap what you did, Log it. Recent entries can be removed until billed.
     Money     What is owed, record cash/check payments, open or resend invoice PDFs.
     Settings  Prices, clients, business info, pause automation.
+  Water tests: on the Log tab, "Test strip" opens the camera. The photo goes to the backend,
+  Claude reads the pads against the bottle chart, Tommy checks the numbers, Save stores them.
+  "Type it in" does the same without a photo.
   Backend: the Apps Script web app at API_URL (Code.gs doPost). Every request is
   POST {pin, action, payload}. The PIN is asked once per device and kept in localStorage.
   Requests send no cookies, so multiple signed-in Google accounts can never interfere.
@@ -183,6 +186,26 @@
   .pin-input { text-align: center; font-size: 28px !important; letter-spacing: 10px; padding: 16px; }
   .pin-msg { color: #ffa3a3; font-weight: 700; margin-top: 12px; min-height: 20px; }
 
+  /* ---------- Water tests ---------- */
+  .water .k { font-size: 11px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; color: var(--aqua); }
+  .levels { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+  .lv { font-size: 13px; font-weight: 700; padding: 5px 10px; border-radius: 999px; background: rgba(255,255,255,.06); color: var(--muted); }
+  .lv b { color: var(--ink); margin-right: 4px; font-weight: 800; }
+  .lv.good { background: rgba(76,214,154,.14); color: var(--green); }
+  .lv.watch { background: rgba(227,189,106,.16); color: var(--gold); }
+  .lv.fix { background: rgba(255,107,107,.15); color: #ffa3a3; }
+  .strip-photo { display: block; width: 100%; max-height: 260px; object-fit: contain; border-radius: 14px; border: 1px solid var(--line); background: #000; margin-bottom: 10px; }
+  .rgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; margin-top: 12px; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-left: 6px; vertical-align: middle; }
+  .dot.good { background: var(--green); } .dot.watch { background: var(--gold); } .dot.fix { background: var(--red); }
+  .hist { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .hist th { color: var(--muted); font-weight: 800; font-size: 11px; letter-spacing: .6px; text-align: center; padding: 6px 2px; }
+  .hist td { text-align: center; padding: 10px 2px; border-top: 1px solid var(--line-soft); font-weight: 700; color: var(--muted); }
+  .hist td.d { text-align: left; color: var(--ink); white-space: nowrap; }
+  .hist td.good { color: var(--green); } .hist td.watch { color: var(--gold); } .hist td.fix { color: #ffa3a3; }
+  #busy { flex-direction: column; gap: 14px; }
+  #busyMsg { font-weight: 800; color: var(--gold); letter-spacing: .4px; }
+
   .tagline { text-align: center; margin: 28px 0 8px; font-family: var(--display); font-size: 11px; letter-spacing: 3px; color: rgba(227,189,106,.55); }
 </style>
 </head>
@@ -218,7 +241,8 @@
     <div id="pinMsg" class="pin-msg"></div>
   </div>
 </div>
-<div id="busy"><div class="ring"></div></div>
+<div id="busy"><div class="ring"></div><div id="busyMsg"></div></div>
+<input type="file" id="stripInput" accept="image/*" capture="environment" style="display:none" onchange="onStripPhoto(this)">
 <div id="toast"></div>
 
 <script>
@@ -330,7 +354,7 @@
     }
   }
 
-  function setBusy(on) { S.busy = on; $('busy').classList.toggle('on', on); }
+  function setBusy(on, msg) { S.busy = on; $('busy').classList.toggle('on', on); $('busyMsg').textContent = on ? (msg || '') : ''; }
   let toastTimer;
   function toast(msg, isErr) {
     const t = $('toast');
@@ -409,6 +433,8 @@
           <div class="chev">&#9662;</div>
         </button>`
         : `<div class="card empty">No clients yet. Add them in Settings.</div>`}
+
+      ${anyClients && Array.isArray(d.targets) ? `<div class="lbl">Water</div>${waterCard(picked)}` : ''}
 
       <div class="lbl">When</div>
       <input type="date" class="input" value="${S.date}" max="${d.today}" onchange="S.date = this.value">
@@ -537,6 +563,149 @@
   function voidWork(id) {
     if (!confirm('Remove this entry? It will not be billed.')) return;
     run('voidWork', id, 'Removed');
+  }
+
+  // ----- Water tests -----
+  // Status colors mirror readingStatus_() in Code.gs, driven by the same TARGETS list from the server.
+  function readingStatus(key, vals) {
+    const t = S.data.targets.find(x => x.key === key);
+    const v = vals[key];
+    if (!t || v === '' || v == null) return '';
+    if (t.combined) {
+      if (vals.fc === '' || vals.fc == null) return '';
+      const cc = Number(v) - Number(vals.fc);
+      return cc <= 0.5 ? 'good' : cc <= 1 ? 'watch' : 'fix';
+    }
+    if (v >= t.ideal[0] && v <= t.ideal[1]) return 'good';
+    if (v >= t.ok[0] && v <= t.ok[1]) return 'watch';
+    return 'fix';
+  }
+
+  const levelChips = vals => S.data.targets
+    .filter(t => vals[t.key] !== '' && vals[t.key] != null)
+    .map(t => `<span class="lv ${readingStatus(t.key, vals)}"><b>${t.short}</b>${esc(vals[t.key])}</span>`).join('');
+
+  function waterCard(client) {
+    const list = client ? ((S.data.readings || {})[client.id] || []) : [];
+    const last = list[0];
+    const buttons = `
+      <div class="actions">
+        ${S.data.stripReader ? '<button class="btn gold sm" onclick="startStrip()">&#128247; Test strip</button>' : ''}
+        <button class="btn ghost sm" onclick="openReading(null)">Type it in</button>
+        ${list.length ? '<button class="btn ghost sm" onclick="openHistory()">History</button>' : ''}
+      </div>`;
+    if (!client) return `<div class="card water"><div class="muted">Pick a client to test their water.</div></div>`;
+    return `<div class="card water">
+      ${last
+        ? `<div class="k">Last test &middot; ${niceDate(last.date)}</div><div class="levels">${levelChips(last)}</div>`
+        : `<div class="muted">No water tests yet for ${esc(client.name)}.</div>`}
+      ${buttons}
+    </div>`;
+  }
+
+  function startStrip() {
+    if (!S.clientId) { toast('Pick a client first.', true); return; }
+    $('stripInput').value = '';
+    $('stripInput').click();
+  }
+
+  /** Shrinks the camera photo to 1280px JPEG so uploads are fast on cell signal. */
+  function shrinkPhoto(file) {
+    return new Promise((resolve, reject) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        const scale = Math.min(1, 1280 / Math.max(img.naturalWidth, img.naturalHeight));
+        const c = document.createElement('canvas');
+        c.width = Math.round(img.naturalWidth * scale);
+        c.height = Math.round(img.naturalHeight * scale);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        resolve(c.toDataURL('image/jpeg', 0.85));
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not open that photo.')); };
+      img.src = url;
+    });
+  }
+
+  async function onStripPhoto(input) {
+    const file = input.files && input.files[0];
+    if (!file || S.busy) return;
+    let photo = '';
+    setBusy(true, 'Reading the strip...');
+    try {
+      photo = await shrinkPhoto(file);
+      const result = await call('readStrip', { clientId: S.clientId, image: photo.split(',')[1] });
+      setBusy(false);
+      openReading(result, photo);
+    } catch (e) {
+      setBusy(false);
+      if (e && e.message === 'WRONG_PIN') return;
+      toast((e && e.message) || String(e), true);
+      if (photo) openReading({ readings: {}, notes: '', photoId: '', found: true }, photo);
+    }
+  }
+
+  /** The check-and-save sheet. r = strip result from the server, or null to type readings by hand. */
+  function openReading(r, photo) {
+    const client = clientById(S.clientId);
+    if (!client) { toast('Pick a client first.', true); return; }
+    S.reading = { ai: r && r.photoId ? r.readings : null, photoId: (r && r.photoId) || '' };
+    const vals = (r && r.readings) || {};
+    openSheet(`
+      <h3>Water test</h3>
+      <div class="muted" style="margin:-6px 0 14px">${esc(client.name)}</div>
+      ${photo ? `<img class="strip-photo" src="${photo}" alt="Test strip">` : ''}
+      ${r && r.found === false ? '<div class="warn" style="margin:0 0 10px">Could not find a strip and its color chart in that photo. Retake it with the strip held right next to the bottle chart, or type the numbers.</div>' : ''}
+      ${r && r.notes ? `<div class="muted" style="margin-bottom:6px">Reader: ${esc(r.notes)}</div>` : ''}
+      ${r && r.photoId ? '<div class="muted" style="color:var(--aqua)">Check each number against the chart, fix any that look off, then Save.</div>' : ''}
+      <div class="rgrid">
+        ${S.data.targets.map(t => `
+          <label class="field"><span>${esc(t.label)}<i class="dot" id="dot-${t.key}"></i></span>
+            <input class="input" id="rv-${t.key}" type="number" inputmode="decimal" step="any" value="${vals[t.key] === '' || vals[t.key] == null ? '' : esc(vals[t.key])}" oninput="updateDots()"></label>`).join('')}
+      </div>
+      <label class="field"><span>Date</span><input class="input" id="rDate" type="date" value="${S.date || S.data.today}" max="${S.data.today}"></label>
+      <label class="field"><span>Note (optional)</span><textarea class="input" id="rNote" placeholder="Added 1 gal chlorine, cloudy water..."></textarea></label>
+      <div class="row" style="margin-top:8px">
+        <button class="btn ghost grow" onclick="closeSheet()">Cancel</button>
+        ${S.data.stripReader ? '<button class="btn ghost grow" onclick="closeSheet(); startStrip()">Retake</button>' : ''}
+        <button class="btn gold grow" onclick="saveReading()">Save</button>
+      </div>`);
+    updateDots();
+  }
+
+  function readingInputs() {
+    const vals = {};
+    S.data.targets.forEach(t => { const v = $('rv-' + t.key).value.trim(); vals[t.key] = v === '' ? '' : Number(v); });
+    return vals;
+  }
+
+  function updateDots() {
+    const vals = readingInputs();
+    S.data.targets.forEach(t => { $('dot-' + t.key).className = 'dot ' + readingStatus(t.key, vals); });
+  }
+
+  async function saveReading() {
+    const ok = await run('saveReading', {
+      clientId: S.clientId, date: $('rDate').value, readings: readingInputs(),
+      ai: S.reading.ai, photoId: S.reading.photoId, note: $('rNote').value,
+    }, 'Water test saved');
+    if (ok) closeSheet();
+  }
+
+  function openHistory() {
+    const client = clientById(S.clientId);
+    const list = (client && (S.data.readings || {})[client.id]) || [];
+    const t = S.data.targets;
+    openSheet(`
+      <h3>Water history</h3>
+      <div class="muted" style="margin:-6px 0 14px">${esc(client ? client.name : '')} &middot; last ${list.length} test${list.length === 1 ? '' : 's'}</div>
+      <table class="hist">
+        <tr><th style="text-align:left">Date</th>${t.map(x => `<th>${x.short}</th>`).join('')}</tr>
+        ${list.map(r => `<tr><td class="d">${niceDate(r.date)}</td>${t.map(x => `<td class="${readingStatus(x.key, r)}">${r[x.key] === '' ? '&ndash;' : esc(r[x.key])}</td>`).join('')}</tr>`).join('')}
+      </table>
+      <div class="muted" style="margin-top:12px"><span style="color:var(--green)">Green</span> on target &middot; <span style="color:var(--gold)">Gold</span> watch &middot; <span style="color:#ffa3a3">Red</span> adjust. TC is judged by TC minus FC.</div>
+      <button class="btn ghost big" onclick="closeSheet()">Close</button>`);
   }
 
   // ----- Money tab -----
@@ -679,6 +848,8 @@
         <label class="field"><span>Checks payable to</span><input class="input" id="setPayable" value="${esc(st.CHECKS_PAYABLE_TO)}" placeholder="${esc(st.BUSINESS_NAME)}"></label>
         <label class="field"><span>Mail checks to (optional)</span><input class="input" id="setMail" value="${esc(st.MAILING_ADDRESS)}"></label>
         <label class="field"><span>Payment due (days after invoice)</span><input class="input" id="setTerms" type="number" inputmode="numeric" value="${esc(st.TERMS_DAYS)}"></label>
+        <label class="field"><span>Pool reports go to</span><input class="input" id="setReport" type="email" value="${esc(st.REPORT_EMAIL)}" placeholder="Blank = no report emails"></label>
+        <div class="muted" style="margin:-4px 2px 14px">Strip reader: ${d.stripReader ? '<span style="color:var(--green)">on</span>' : 'off (type readings by hand)'}</div>
         <div class="switch">
           <div><div style="font-weight:800">Pause automation</div><div class="muted">Stops invoices and reminders from sending</div></div>
           <input type="checkbox" id="setPaused" ${st.AUTOMATION_PAUSED ? 'checked' : ''}>
@@ -745,7 +916,7 @@
     run('saveSettings', {
       BUSINESS_NAME: $('setBiz').value, OWNER_NAME: $('setOwner').value, BUSINESS_PHONE: $('setPhone').value,
       BUSINESS_EMAIL: $('setEmail').value, CHECKS_PAYABLE_TO: $('setPayable').value, MAILING_ADDRESS: $('setMail').value,
-      TERMS_DAYS: $('setTerms').value, AUTOMATION_PAUSED: $('setPaused').checked,
+      TERMS_DAYS: $('setTerms').value, AUTOMATION_PAUSED: $('setPaused').checked, REPORT_EMAIL: $('setReport').value,
     }, 'Saved');
   }
 
