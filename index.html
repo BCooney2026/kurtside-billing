@@ -5,6 +5,7 @@
     Log       Pick a client, tap what you did, Log it. Recent entries can be removed until billed.
     Money     What is owed, record cash/check payments, open or resend invoice PDFs.
     Settings  Prices, clients, business info, pause automation.
+    Dash      Heads-up list, money, water health, work, and system status (loaded on demand).
   Water tests: on the Log tab, "Test strip" opens the camera. The photo goes to the backend,
   Claude reads the pads against the bottle chart, Tommy checks the numbers, Save stores them.
   "Type it in" does the same without a photo.
@@ -37,6 +38,7 @@
     --gold: #e3bd6a; --gold-deep: #b8862f;
     --gold-grad: linear-gradient(180deg, #f8e2a2 0%, #e3bd6a 45%, #b8862f 100%);
     --aqua: #3fd0ff; --aqua-glow: rgba(63,208,255,.35);
+    --c-logged: #b88a34; --c-collected: #2a9fd0;   /* chart series, validated on the card surface */
     --red: #ff6b6b; --green: #4cd69a;
     --display: 'Cinzel', Georgia, serif;
     --body: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -206,6 +208,50 @@
   #busy { flex-direction: column; gap: 14px; }
   #busyMsg { font-weight: 800; color: var(--gold); letter-spacing: .4px; }
 
+  /* ---------- Dashboard ---------- */
+  .dash-head { display: flex; align-items: flex-end; justify-content: space-between; margin: 6px 2px 4px; }
+  .dash-hi { font-family: var(--display); font-size: 22px; font-weight: 800; background: var(--gold-grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .stale { opacity: .45; transition: opacity .2s; }
+  .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .tile { background: linear-gradient(180deg, var(--card-hi), var(--card)); border: 1px solid var(--line); border-radius: 16px; padding: 13px 14px; }
+  .tile .k { font-size: 11px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
+  .tile .v { font-size: 24px; font-weight: 800; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .tile .s { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .tile.wide { grid-column: 1 / -1; }
+  .heads { list-style: none; margin: 0; padding: 0; }
+  .heads li { display: flex; gap: 10px; align-items: flex-start; padding: 11px 0; border-bottom: 1px solid var(--line-soft); font-size: 14px; }
+  .heads li:last-child { border-bottom: 0; }
+  .heads .ic { flex: none; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 900; }
+  .ic.fix { background: rgba(255,107,107,.18); color: #ffa3a3; } .ic.watch { background: rgba(227,189,106,.18); color: var(--gold); } .ic.good { background: rgba(76,214,154,.16); color: var(--green); }
+  .chart-wrap { position: relative; margin-top: 6px; }
+  .chart-wrap svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .chart-wrap .hit { fill: transparent; cursor: pointer; outline: none; }
+  .chart-wrap .hit:hover, .chart-wrap .hit.on { fill: rgba(255,255,255,.05); }
+  .legend { display: flex; gap: 16px; font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+  .tip { position: absolute; top: -6px; transform: translate(-50%, -100%); background: #0a1a2b; border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font-size: 12px; pointer-events: none; white-space: nowrap; box-shadow: 0 8px 20px rgba(0,0,0,.4); display: none; }
+  .tip b { display: block; color: var(--ink); font-size: 13px; }
+  .tip .ln { display: inline-block; width: 12px; height: 2px; margin-right: 6px; vertical-align: middle; }
+  details.nums summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-top: 10px; }
+  table.nums { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  table.nums td, table.nums th { padding: 6px 4px; text-align: right; border-top: 1px solid var(--line-soft); }
+  table.nums th { color: var(--muted); font-size: 11px; font-weight: 800; }
+  table.nums td:first-child, table.nums th:first-child { text-align: left; }
+  .hbar { display: flex; align-items: center; gap: 10px; padding: 7px 0; font-size: 14px; }
+  .hbar .n { width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hbar .track { flex: 1; height: 8px; border-radius: 4px; background: rgba(255,255,255,.05); }
+  .hbar .fill { height: 8px; border-radius: 4px; background: var(--c-logged); }
+  .hbar .a { width: 64px; text-align: right; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .pool { padding: 12px 0; border-bottom: 1px solid var(--line-soft); }
+  .pool:last-child { border-bottom: 0; }
+  .stlabel { font-size: 11px; font-weight: 800; letter-spacing: .6px; text-transform: uppercase; padding: 3px 8px; border-radius: 999px; }
+  .stlabel.fix { background: rgba(255,107,107,.15); color: #ffa3a3; } .stlabel.watch { background: rgba(227,189,106,.16); color: var(--gold); } .stlabel.good { background: rgba(76,214,154,.14); color: var(--green); } .stlabel.none { background: rgba(255,255,255,.06); color: var(--muted); }
+  .ring { display: flex; align-items: center; gap: 14px; }
+  .ring svg { flex: none; }
+  .sysgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 14px; }
+  .sysgrid div { padding: 9px 0; border-bottom: 1px solid var(--line-soft); font-size: 13px; }
+  .sysgrid div span { display: block; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; margin-bottom: 2px; }
+
   .tagline { text-align: center; margin: 28px 0 8px; font-family: var(--display); font-size: 11px; letter-spacing: 3px; color: rgba(227,189,106,.55); }
 </style>
 </head>
@@ -222,12 +268,14 @@
   <section id="tab-log" class="tab on"><div class="empty">Loading...</div></section>
   <section id="tab-money" class="tab"></section>
   <section id="tab-settings" class="tab"></section>
+  <section id="tab-dash" class="tab"></section>
   <div class="tagline">MAINTENANCE &bull; OPENINGS &bull; CLOSINGS</div>
 </main>
 
 <nav class="tabs">
   <button data-tab="log" class="on" onclick="showTab('log')"><span class="ic">&#9998;</span>Log</button>
   <button data-tab="money" onclick="showTab('money')"><span class="ic">$</span>Money</button>
+  <button data-tab="dash" onclick="showTab('dash')"><span class="ic">&#9672;</span>Dash</button>
   <button data-tab="settings" onclick="showTab('settings')"><span class="ic">&#9881;</span>Settings</button>
 </nav>
 
@@ -372,6 +420,7 @@
     document.querySelectorAll('.tab').forEach(el => el.classList.toggle('on', el.id === 'tab-' + tab));
     document.querySelectorAll('nav.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === tab));
     window.scrollTo(0, 0);
+    if (tab === 'dash') loadDash();
   }
 
   // ---------------- Render ----------------
@@ -710,6 +759,178 @@
       </table>
       <div class="muted" style="margin-top:12px"><span style="color:var(--green)">Green</span> on target &middot; <span style="color:var(--gold)">Gold</span> watch &middot; <span style="color:#ffa3a3">Red</span> adjust. TC is judged by TC minus FC.</div>
       <button class="btn ghost big" onclick="closeSheet()">Close</button>`);
+  }
+
+  // ----- Dash tab -----
+  // Fetched on demand (action "dashboard"). While it refreshes, the last render stays up, dimmed.
+  async function loadDash() {
+    const el = $('tab-dash');
+    if (!S.dash) el.innerHTML = '<div class="empty">Crunching the numbers...</div>';
+    else el.classList.add('stale');
+    try {
+      S.dash = await call('dashboard');
+      renderDash();
+    } catch (e) {
+      if (!(e && e.message === 'WRONG_PIN')) toast((e && e.message) || String(e), true);
+      if (!S.dash) el.innerHTML = '<div class="empty">Could not load the dashboard. Pull down or tap Dash to retry.</div>';
+    } finally {
+      el.classList.remove('stale');
+    }
+  }
+
+  const ICON = { fix: '&#10005;', watch: '!', good: '&#10003;' };
+  const WORD = { fix: 'Adjust', watch: 'Watch', good: 'Good', none: 'Not tested' };
+  const ago = n => n === 0 ? 'today' : n === 1 ? 'yesterday' : n + ' days ago';
+  const whole = n => '$' + Math.round(Number(n) || 0).toLocaleString('en-US');
+  const plural = (n, word) => n + ' ' + word + (n === 1 ? '' : 's');
+
+  /** The auto to-do list: everything on the dashboard that wants a decision, worst first. */
+  function headsUp(D) {
+    const out = [];
+    const m = D.money, w = D.work, wa = D.water, sy = D.system;
+    if (m.lateCount) out.push(['fix', `${m.lateCount} late invoice${m.lateCount === 1 ? '' : 's'}: ${money(m.lateTotal)} past due`]);
+    wa.pools.filter(p => p.worst === 'fix').forEach(p => out.push(['fix', `${esc(p.name)}'s water needs adjusting (${p.flags.filter(f => f.status === 'fix').map(f => esc(f.label)).join(', ')})`]));
+    w.weekly.filter(x => x.overdue).forEach(x => out.push(['watch', x.daysSince === null
+      ? `${esc(x.name)}: no ${x.biweekly ? 'biweekly' : 'weekly'} visit logged yet`
+      : `${esc(x.name)}: last visit ${ago(x.daysSince)}${x.biweekly ? ' (biweekly)' : ''}`]));
+    if (m.truck.cash + m.truck.checks > 0) out.push(['watch', `Deposit: ${money(m.truck.cash)} cash and ${money(m.truck.checks)} in checks taken this week`]);
+    const mo = new Date().getMonth();
+    if (mo >= 8 && mo <= 10 && w.closingsLeft.length) out.push(['watch', `Closing season: ${w.closingsLeft.length} pool${w.closingsLeft.length === 1 ? '' : 's'} still to close`]);
+    if (sy.unpricedItems.length) out.push(['fix', `No price set for ${sy.unpricedItems.map(esc).join(', ')}. Settings > Prices.`]);
+    if (!sy.ownerEmailSet) out.push(['watch', 'Your email is blank in Settings, so previews and invoice copies are going nowhere useful']);
+    if (sy.missingEmails) out.push(['watch', `${sy.missingEmails} client${sy.missingEmails === 1 ? ' has' : 's have'} no email: their bills must be handed over`]);
+    if (sy.paused) out.push(['fix', 'Automation is paused: no invoices or reminders will go out']);
+    if (sy.lastDailyHoursAgo !== null && sy.lastDailyHoursAgo > 30) out.push(['fix', `The 7am daily job last ran ${sy.lastDailyHoursAgo} hours ago`]);
+    return out;
+  }
+
+  /** Six-month grouped bars: Logged (work) vs Collected (payments). Tap a month for its numbers. */
+  function moneyChart(months) {
+    const W = 320, H = 150, top = 14, bottom = 22, left = 34;
+    const max = Math.max(1, ...months.map(x => Math.max(x.logged, x.collected)));
+    const step = Math.pow(10, Math.floor(Math.log10(max)));
+    const nice = Math.ceil(max / step) * step;
+    const y = v => top + (H - top - bottom) * (1 - v / nice);
+    const slot = (W - left) / months.length, bw = Math.min(14, slot / 3);
+    const bar = (x, v, color) => {
+      if (!(v > 0)) return '';
+      const yy = y(v), h = (H - bottom) - yy, r = Math.min(4, h, bw / 2);
+      return `<path fill="${color}" d="M${x},${H - bottom} V${yy + r} Q${x},${yy} ${x + r},${yy} H${x + bw - r} Q${x + bw},${yy} ${x + bw},${yy + r} V${H - bottom} Z"/>`;
+    };
+    let g = '';
+    [0, nice / 2, nice].forEach(v => {
+      g += `<line x1="${left}" x2="${W}" y1="${y(v)}" y2="${y(v)}" stroke="rgba(255,255,255,${v ? .06 : .18})"/>` +
+        `<text x="${left - 6}" y="${y(v) + 4}" text-anchor="end" font-size="10" fill="#8fa4b9">${v >= 1000 ? '$' + (v / 1000) + 'k' : '$' + v}</text>`;
+    });
+    months.forEach((m, i) => {
+      const cx = left + slot * i + slot / 2;
+      g += bar(cx - bw - 1, m.logged, 'var(--c-logged)') + bar(cx + 1, m.collected, 'var(--c-collected)');
+      g += `<text x="${cx}" y="${H - 6}" text-anchor="middle" font-size="11" fill="#8fa4b9">${m.label}</text>`;
+      g += `<rect class="hit" x="${left + slot * i}" y="0" width="${slot}" height="${H - bottom}" rx="6" data-i="${i}" tabindex="0" onclick="chartTip(${i})" onfocus="chartTip(${i})"></rect>`;
+    });
+    return `<div class="chart-wrap" id="mchart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Logged and collected by month">${g}</svg><div class="tip" id="mtip"></div></div>
+      <div class="legend"><span><i style="background:var(--c-logged)"></i>Logged (work done)</span><span><i style="background:var(--c-collected)"></i>Collected</span></div>
+      <details class="nums"><summary>Show numbers</summary><table class="nums"><tr><th>Month</th><th>Logged</th><th>Collected</th></tr>
+        ${months.map(m => `<tr><td>${m.label}</td><td>${money(m.logged)}</td><td>${money(m.collected)}</td></tr>`).join('')}</table></details>`;
+  }
+
+  function chartTip(i) {
+    const m = S.dash.money.months[i];
+    const wrap = $('mchart'), tip = $('mtip');
+    const hits = wrap.querySelectorAll('.hit');
+    hits.forEach(h => h.classList.toggle('on', Number(h.dataset.i) === i));
+    const r = hits[i].getBoundingClientRect(), wr = wrap.getBoundingClientRect();
+    tip.innerHTML = `<div style="color:var(--muted);margin-bottom:3px">${m.label}</div>
+      <b><span class="ln" style="background:var(--c-logged)"></span>${money(m.logged)} <span style="color:var(--muted);font-weight:600">logged</span></b>
+      <b><span class="ln" style="background:var(--c-collected)"></span>${money(m.collected)} <span style="color:var(--muted);font-weight:600">collected</span></b>`;
+    tip.style.left = Math.min(Math.max(r.left - wr.left + r.width / 2, 70), wr.width - 70) + 'px';
+    tip.style.display = 'block';
+    clearTimeout(chartTip.t);
+    chartTip.t = setTimeout(() => { tip.style.display = 'none'; hits.forEach(h => h.classList.remove('on')); }, 3500);
+  }
+
+  function closingRing(done, total) {
+    const pct = total ? done / total : 0, R = 26, C = 2 * Math.PI * R;
+    return `<svg width="68" height="68" viewBox="0 0 68 68" aria-hidden="true">
+      <circle cx="34" cy="34" r="${R}" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="7"/>
+      <circle cx="34" cy="34" r="${R}" fill="none" stroke="var(--c-collected)" stroke-width="7" stroke-linecap="round"
+        stroke-dasharray="${(C * pct).toFixed(1)} ${C.toFixed(1)}" transform="rotate(-90 34 34)"/>
+      <text x="34" y="39" text-anchor="middle" font-size="15" font-weight="800" fill="#eef3f8">${Math.round(pct * 100)}%</text></svg>`;
+  }
+
+  function renderDash() {
+    const D = S.dash, m = D.money, w = D.work, wa = D.water, sy = D.system;
+    const hr = new Date().getHours();
+    const hi = (hr < 12 ? 'Morning' : hr < 17 ? 'Afternoon' : 'Evening') + (D.owner ? ', ' + esc(D.owner) : '');
+    const heads = headsUp(D);
+    const maxTop = Math.max(1, ...m.topClients.map(c => c.amount));
+
+    $('tab-dash').innerHTML = `
+      <div class="dash-head"><div class="dash-hi">${hi}</div>
+        <button class="btn ghost sm" onclick="loadDash()">&#8635; ${esc(D.generated)}</button></div>
+
+      <div class="lbl">Heads up</div>
+      <div class="card">${heads.length
+        ? `<ul class="heads">${heads.map(([st, t]) => `<li><span class="ic ${st}">${ICON[st]}</span><span>${t}</span></li>`).join('')}</ul>`
+        : `<ul class="heads"><li><span class="ic good">${ICON.good}</span><span>All clear. Nothing needs you right now.</span></li></ul>`}</div>
+
+      <div class="lbl">Money</div>
+      <div class="tiles">
+        <div class="tile wide"><div class="k">Owed to you</div><div class="v money-big" style="font-size:34px">${money(m.owed)}</div>
+          <div class="s">${m.openCount} open invoice${m.openCount === 1 ? '' : 's'}${m.lateCount ? ` &middot; <span style="color:#ffa3a3">${m.lateCount} late</span>` : ''}</div></div>
+        <div class="tile"><div class="k">Logged this month</div><div class="v">${whole(m.loggedThisMonth)}</div><div class="s">work done</div></div>
+        <div class="tile"><div class="k">Collected this month</div><div class="v">${whole(m.collectedThisMonth)}</div><div class="s">cash + checks</div></div>
+        <div class="tile"><div class="k">In the truck</div><div class="v">${whole(m.truck.cash + m.truck.checks)}</div><div class="s">${money(m.truck.cash)} cash &middot; ${m.truck.checkCount} check${m.truck.checkCount === 1 ? '' : 's'}, last 7 days</div></div>
+        <div class="tile"><div class="k">Avg days to pay</div><div class="v">${m.avgDaysToPay === null ? '&ndash;' : m.avgDaysToPay}</div><div class="s">invoice to paid in full</div></div>
+      </div>
+      <div class="card" style="margin-top:10px">
+        <div class="row"><div class="grow" style="font-weight:800">Last 6 months</div><div class="muted">Season: ${whole(m.seasonLogged)}</div></div>
+        ${moneyChart(m.months)}
+      </div>
+      ${m.late.length ? `<div class="card list" style="margin-top:10px"><div style="font-weight:800;margin-bottom:4px">Late payers</div>
+        ${m.late.map(l => `<div class="item row"><div class="grow"><div style="font-weight:700">${esc(l.name)}</div><div class="muted">#${esc(l.id)} &middot; ${l.days} day${l.days === 1 ? '' : 's'} late</div></div><div class="amt">${money(l.balance)}</div></div>`).join('')}</div>` : ''}
+      ${m.topClients.length ? `<div class="card" style="margin-top:10px"><div style="font-weight:800;margin-bottom:6px">Top clients this season</div>
+        ${m.topClients.map(c => `<div class="hbar"><div class="n">${esc(c.name)}</div><div class="track"><div class="fill" style="width:${(c.amount / maxTop * 100).toFixed(1)}%"></div></div><div class="a">${whole(c.amount)}</div></div>`).join('')}</div>` : ''}
+
+      <div class="lbl">Water</div>
+      <div class="tiles">
+        <div class="tile"><div class="k">Need adjusting</div><div class="v" style="color:${wa.needAttention ? '#ffa3a3' : 'var(--ink)'}">${wa.needAttention}</div><div class="s">${wa.watch} to watch &middot; ${wa.good} good</div></div>
+        <div class="tile"><div class="k">Tests this month</div><div class="v">${wa.testsThisMonth}</div><div class="s">${wa.untested} pool${wa.untested === 1 ? '' : 's'} never tested</div></div>
+      </div>
+      <div class="card list" style="margin-top:10px">
+        ${wa.pools.map(p => p.tested ? `
+          <div class="pool"><div class="row"><div class="grow"><div style="font-weight:800">${esc(p.name)}</div><div class="muted">Tested ${ago(p.daysSince)}</div></div>
+            <span class="stlabel ${p.worst}">${ICON[p.worst]} ${WORD[p.worst]}</span></div>
+            ${p.flags.length ? `<div class="levels">${p.flags.map(f => `<span class="lv ${f.status}" title="${esc(f.note || '')}"><b>${esc(f.label)}</b>${esc(f.value)}</span>`).join('')}</div>` : ''}
+            ${p.flags.filter(f => f.note).map(f => `<div class="muted" style="margin-top:6px;font-size:12px">${esc(f.label)}: ${esc(f.note)}</div>`).join('')}
+          </div>` : `
+          <div class="pool"><div class="row"><div class="grow" style="font-weight:700">${esc(p.name)}</div><span class="stlabel none">${WORD.none}</span></div></div>`).join('')}
+      </div>
+
+      <div class="lbl">Work</div>
+      <div class="tiles">
+        <div class="tile"><div class="k">Visits this week</div><div class="v">${w.visitsThisWeek}</div><div class="s">last 7 days</div></div>
+        <div class="tile"><div class="k">Jobs this month</div><div class="v">${w.jobsThisMonth}</div><div class="s">everything logged</div></div>
+      </div>
+      <div class="card list" style="margin-top:10px"><div style="font-weight:800;margin-bottom:4px">Weekly pools</div>
+        ${w.weekly.length ? w.weekly.map(x => `<div class="item row"><div class="grow"><div style="font-weight:700">${esc(x.name)}${x.biweekly ? ' <span class="muted">(biweekly)</span>' : ''}</div>
+          <div class="muted">${x.daysSince === null ? 'No visit logged yet' : 'Last visit ' + ago(x.daysSince)}</div></div>
+          <span class="stlabel ${x.overdue ? 'watch' : 'good'}">${x.overdue ? ICON.watch + ' Due' : ICON.good + ' On track'}</span></div>`).join('') : '<div class="empty">No weekly clients.</div>'}
+      </div>
+      <div class="card" style="margin-top:10px"><div class="ring">${closingRing(w.closings, w.clientCount)}
+        <div><div style="font-weight:800">Closings: ${w.closings} of ${w.clientCount} done</div><div class="muted">Openings this year: ${w.openings}</div></div></div>
+        ${w.closingsLeft.length ? `<details class="nums"><summary>${w.closingsLeft.length} still to close</summary><div class="muted" style="margin-top:6px;line-height:1.7">${w.closingsLeft.map(esc).join('<br>')}</div></details>` : ''}
+      </div>
+
+      <div class="lbl">System</div>
+      <div class="card"><div class="sysgrid">
+        <div><span>Next preview</span>${niceDate(sy.nextPreview)}</div>
+        <div><span>Next billing</span>${niceDate(sy.nextBilling)}</div>
+        <div><span>Automation</span>${sy.paused ? '<span style="color:#ffa3a3">Paused</span>' : '<span style="color:var(--green)">On</span>'}</div>
+        <div><span>Daily job</span>${sy.lastDailyRun ? esc(sy.lastDailyRun) : 'Not run yet'}</div>
+        <div><span>Emails this month</span>${plural(sy.invoicesEmailed, 'invoice')} &middot; ${plural(sy.receiptsEmailed, 'receipt')} &middot; ${plural(sy.reportsEmailed, 'report')}</div>
+        <div><span>Strip reader</span>${sy.stripReader ? `${sy.stripReads} read${sy.stripReads === 1 ? '' : 's'} &middot; ~$${sy.stripCost.toFixed(sy.stripCost < 0.01 ? 4 : 2)}` : 'Off'}</div>
+      </div></div>`;
   }
 
   // ----- Money tab -----

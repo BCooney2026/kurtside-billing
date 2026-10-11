@@ -92,6 +92,11 @@ const TARGETS = [
 ];
 const READING_KEYS = TARGETS.map(t => t.key);
 
+// Haiku 5.5 list prices (USD per token), only used to estimate strip-reader spend on the dashboard.
+const STRIP_PRICE_IN = 0.10 / 1e6;
+const STRIP_PRICE_OUT = 0.50 / 1e6;
+const PROP_LAST_DAILY = 'LAST_DAILY_RUN';     // set at the end of every dailyJob, shown on the dashboard
+
 /** Every tab, with [codeKey, Header Label] for each column, in order. */
 const SHEETS = {
   settings: { name: 'Settings', cols: [['key', 'Setting'], ['value', 'Value'], ['notes', 'Notes']] },
@@ -288,6 +293,7 @@ function dailyJob() {
   safely_('billing', () => { if (!paused && day === Number(s.BILLING_DAY)) runBilling(); });
   safely_('reminders', () => { if (!paused) runReminders(); });
   safely_('digest', () => { if (now.getDay() === 1) sendDigest(); });
+  PropertiesService.getScriptProperties().setProperty(PROP_LAST_DAILY, now.toISOString());
 }
 
 /** Creates one invoice per client for all unbilled work dated before the 1st of this month. Returns count. */
@@ -411,7 +417,7 @@ function api(pin, action, payload) {
     bootstrap: bootstrap_, logWork: logWork_, voidWork: voidWork_,
     recordPayment: recordPayment_, resendInvoice: resendInvoice_,
     saveClient: saveClient_, savePrice: savePrice_, saveSettings: saveSettings_,
-    readStrip: readStrip_, saveReading: saveReading_,
+    readStrip: readStrip_, saveReading: saveReading_, dashboard: dashboard_,
   };
   const handler = handlers[action];
   if (!handler) throw new Error('Unknown action: ' + action);
@@ -769,6 +775,7 @@ function askClaudeForStrip_(b64, apiKey) {
     throw new Error('Strip reader error ' + res.code + ': ' + res.message.slice(0, 120));
   }
 
+  trackStripUsage_(res.body.usage);
   const text = (res.body.content || []).filter(c => c.type === 'text').map(c => c.text).join('');
   const stop = String(res.body.stop_reason || '');
   if (stop === 'refusal') {
@@ -800,6 +807,19 @@ function postToClaude_(request, apiKey) {
   try { body = JSON.parse(res.getContentText()); } catch (e) { /* non-JSON error page */ }
   const message = String((body.error && body.error.message) || (res.getResponseCode() === 200 ? '' : res.getContentText()));
   return { code: res.getResponseCode(), body: body, message: message };
+}
+
+/** Adds one read's token counts to this month's running total (Script Properties STRIP_USAGE_yyyyMM). */
+function trackStripUsage_(usage) {
+  safely_('strip usage', () => {
+    const props = PropertiesService.getScriptProperties();
+    const key = 'STRIP_USAGE_' + fmt_(new Date(), 'yyyyMM');
+    const u = JSON.parse(props.getProperty(key) || '{"reads":0,"in":0,"out":0}');
+    u.reads += 1;
+    u.in += Number(usage && usage.input_tokens) || 0;
+    u.out += Number(usage && usage.output_tokens) || 0;
+    props.setProperty(key, JSON.stringify(u));
+  });
 }
 
 function blankReadings_() {
@@ -942,6 +962,165 @@ function sendPoolReport_(row, ai, s) {
     htmlBody: emailShell_(body, s, false),
     inlineImages: photo ? { strip: photo } : undefined,
   });
+}
+
+// ============================================================
+// Dashboard (the app's Dash tab)
+// Read-only. Everything is computed here so the phone only draws it.
+// Loaded on demand when the tab opens, so the rest of the app stays fast.
+// ============================================================
+
+function dashboard_() {
+  const s = getSettings_();
+  const now = new Date();
+  const today = stripTime_(now);
+  const year = now.getFullYear();
+  const monthStart = startOfMonth_(now);
+  const weekAgo = addDays_(today, -6);            // last 7 days including today
+
+  const clients = readTable_(SHEETS.clients).filter(c => toBool_(c.active));
+  const work = readTable_(SHEETS.work).filter(w => !toBool_(w.voided) && w.date instanceof Date);
+  const payments = readTable_(SHEETS.payments).filter(p => p.date instanceof Date);
+  const invoices = readTable_(SHEETS.invoices);
+  const readings = readTable_(SHEETS.readings).filter(r => r.date instanceof Date);
+  const inMonth = (d, y, m) => d.getFullYear() === y && d.getMonth() === m;
+
+  // ---- Money ----
+  const open = invoices.filter(i => i.status === 'Open' && Number(i.balance) > 0);
+  const late = open.map(i => ({ id: String(i.id), name: String(i.clientName), balance: Number(i.balance), days: daysBetween_(i.dueDate, today) }))
+    .filter(i => i.days > 0).sort((a, b) => b.days - a.days);
+
+  const months = [];
+  for (let k = 5; k >= 0; k--) {
+    const d = new Date(year, now.getMonth() - k, 1);
+    const y = d.getFullYear(), m = d.getMonth();
+    months.push({
+      label: fmt_(d, 'MMM'),
+      logged: round2_(work.filter(w => inMonth(w.date, y, m)).reduce((t, w) => t + Number(w.amount || 0), 0)),
+      collected: round2_(payments.filter(p => inMonth(p.date, y, m)).reduce((t, p) => t + Number(p.amount || 0), 0)),
+    });
+  }
+
+  const weekPays = payments.filter(p => stripTime_(p.date) >= weekAgo);
+  const truck = {
+    cash: round2_(weekPays.filter(p => p.method === 'Cash').reduce((t, p) => t + Number(p.amount), 0)),
+    checks: round2_(weekPays.filter(p => p.method === 'Check').reduce((t, p) => t + Number(p.amount), 0)),
+    checkCount: weekPays.filter(p => p.method === 'Check').length,
+  };
+
+  // Average days from invoice to final payment, over paid invoices.
+  const lastPayByInvoice = {};
+  payments.forEach(p => { const k = String(p.invoiceId); if (!lastPayByInvoice[k] || p.date > lastPayByInvoice[k]) lastPayByInvoice[k] = p.date; });
+  const payDays = invoices.filter(i => i.status === 'Paid' && lastPayByInvoice[String(i.id)] && i.invoiceDate instanceof Date)
+    .map(i => Math.max(0, daysBetween_(i.invoiceDate, lastPayByInvoice[String(i.id)])));
+  const avgDaysToPay = payDays.length ? Math.round(payDays.reduce((a, b) => a + b, 0) / payDays.length) : null;
+
+  const seasonByClient = {};
+  work.filter(w => w.date.getFullYear() === year).forEach(w => {
+    const k = String(w.clientName); seasonByClient[k] = (seasonByClient[k] || 0) + Number(w.amount || 0);
+  });
+  const topClients = Object.keys(seasonByClient).map(n => ({ name: n, amount: round2_(seasonByClient[n]) }))
+    .sort((a, b) => b.amount - a.amount).slice(0, 5);
+
+  const money = {
+    owed: round2_(open.reduce((t, i) => t + Number(i.balance), 0)),
+    openCount: open.length,
+    late: late.slice(0, 6), lateCount: late.length, lateTotal: round2_(late.reduce((t, i) => t + i.balance, 0)),
+    loggedThisMonth: months[5].logged,
+    collectedThisMonth: months[5].collected,
+    seasonLogged: round2_(Object.keys(seasonByClient).reduce((t, k) => t + seasonByClient[k], 0)),
+    months, truck, avgDaysToPay, topClients,
+  };
+
+  // ---- Work ----
+  const lastByClientItem = (clientId, itemId) => work
+    .filter(w => String(w.clientId) === String(clientId) && w.itemId === itemId)
+    .reduce((best, w) => (!best || w.date > best ? w.date : best), null);
+
+  const weekly = clients.filter(c => c.type === 'Weekly').map(c => {
+    const biweekly = /bi-?weekly/i.test(String(c.notes || ''));
+    const last = lastByClientItem(c.id, 'VISIT');
+    const since = last ? daysBetween_(last, today) : null;
+    const due = biweekly ? 14 : 7;
+    return { name: String(c.name), biweekly, lastVisit: last ? ymd_(last) : '', daysSince: since, overdue: since === null || since > due };
+  }).sort((a, b) => (b.daysSince === null ? 999 : b.daysSince) - (a.daysSince === null ? 999 : a.daysSince));
+
+  const thisYear = w => w.date.getFullYear() === year;
+  const openedIds = {}, closedIds = {};
+  work.filter(thisYear).forEach(w => {
+    if (w.itemId === 'OPENING') openedIds[String(w.clientId)] = true;
+    if (w.itemId === 'CLOSING') closedIds[String(w.clientId)] = true;
+  });
+  const closingsLeft = clients.filter(c => !closedIds[String(c.id)]).map(c => String(c.name)).sort();
+
+  const workOut = {
+    visitsThisWeek: work.filter(w => w.itemId === 'VISIT' && stripTime_(w.date) >= weekAgo).length,
+    jobsThisMonth: work.filter(w => w.date >= monthStart).length,
+    weekly,
+    openings: Object.keys(openedIds).length,
+    closings: Object.keys(closedIds).length,
+    clientCount: clients.length,
+    closingsLeft,
+  };
+
+  // ---- Water ----
+  const latestByClient = {};
+  readings.forEach(r => { const k = String(r.clientId); if (!latestByClient[k] || r.date > latestByClient[k].date) latestByClient[k] = r; });
+  const rank = { fix: 3, watch: 2, good: 1, '': 0 };
+  const pools = clients.map(c => {
+    const r = latestByClient[String(c.id)];
+    if (!r) return { name: String(c.name), tested: false };
+    const vals = {}; READING_KEYS.forEach(k => { vals[k] = r[k] === '' ? '' : Number(r[k]); });
+    const flags = [];
+    let worst = '';
+    TARGETS.forEach(t => {
+      const st = readingStatus_(t.key, vals);
+      if (rank[st] > rank[worst]) worst = st;
+      if (st !== 'fix' && st !== 'watch') return;
+      flags.push(t.combined
+        ? { label: 'Combined Cl', value: round2_(vals.tc - vals.fc), status: st, note: 'Total minus free chlorine. High means chloramines: shock it.' }
+        : { label: t.short, value: vals[t.key], status: st });
+    });
+    // Chlorine strength depends on stabilizer: free chlorine should be about 7.5% of CYA.
+    if (vals.fc !== '' && vals.cya !== '' && vals.cya > 0 && vals.fc < 0.075 * vals.cya) {
+      flags.push({ label: 'FC vs CYA', value: vals.fc + ' / ' + vals.cya, status: 'fix', note: 'Free chlorine too low for this stabilizer level' });
+      worst = 'fix';
+    }
+    return { name: String(c.name), tested: true, date: ymd_(r.date), daysSince: daysBetween_(r.date, today), worst: worst || 'good', flags, vals };
+  }).sort((a, b) => (rank[b.worst] || 0) - (rank[a.worst] || 0) || (a.tested === b.tested ? 0 : a.tested ? -1 : 1));
+
+  const water = {
+    pools,
+    needAttention: pools.filter(p => p.worst === 'fix').length,
+    watch: pools.filter(p => p.worst === 'watch').length,
+    good: pools.filter(p => p.worst === 'good').length,
+    untested: pools.filter(p => !p.tested).length,
+    testsThisMonth: readings.filter(r => r.date >= monthStart).length,
+  };
+
+  // ---- System ----
+  const props = PropertiesService.getScriptProperties();
+  const usage = JSON.parse(props.getProperty('STRIP_USAGE_' + fmt_(now, 'yyyyMM')) || '{"reads":0,"in":0,"out":0}');
+  const lastDaily = props.getProperty(PROP_LAST_DAILY);
+  const stampInMonth = v => v instanceof Date && v >= monthStart;
+  const system = {
+    invoicesEmailed: invoices.filter(i => stampInMonth(i.sentAt)).length,
+    receiptsEmailed: payments.filter(p => stampInMonth(p.receiptSentAt)).length,
+    reportsEmailed: readings.filter(r => stampInMonth(r.reportSentAt)).length,
+    stripReads: usage.reads,
+    stripCost: Math.round((usage.in * STRIP_PRICE_IN + usage.out * STRIP_PRICE_OUT) * 10000) / 10000,
+    stripReader: !!props.getProperty(PROP_API_KEY),
+    paused: toBool_(s.AUTOMATION_PAUSED),
+    nextBilling: ymd_(nextDayOfMonth_(Number(s.BILLING_DAY) || 1)),
+    nextPreview: ymd_(nextDayOfMonth_(Number(s.PREVIEW_DAY) || 28)),
+    lastDailyRun: lastDaily ? fmt_(new Date(lastDaily), 'EEE MMM d, h:mm a') : '',
+    lastDailyHoursAgo: lastDaily ? Math.round((now - new Date(lastDaily)) / 3600000) : null,
+    ownerEmailSet: !!String(s.BUSINESS_EMAIL || '').trim(),
+    missingEmails: clients.filter(c => !String(c.email || '').trim()).length,
+    unpricedItems: readTable_(SHEETS.prices).filter(p => toBool_(p.active) && !(Number(p.price) > 0)).map(p => String(p.name)),
+  };
+
+  return { generated: fmt_(now, 'h:mm a'), owner: String(s.OWNER_NAME || ''), money, work: workOut, water, system };
 }
 
 // ============================================================
