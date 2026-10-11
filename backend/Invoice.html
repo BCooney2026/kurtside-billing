@@ -115,6 +115,10 @@
     <tr><td style="text-align:right;">Balance due by <?= data.dueDate ?></td><td class="v" style="text-align:right; width:110px;"><?= data.balance ?></td></tr>
   </table>
 
+  <? if (data.message) { ?>
+    <div style="margin-top:18px; padding:12px 14px; border-left:4px solid #d4a64a; background:#faf6ec; font-style:italic; color:#0b1f33; white-space:pre-wrap;"><?= data.message ?></div>
+  <? } ?>
+
   <div class="pay">
     <b>How to pay:</b> cash or check.<br>
     Make checks payable to <b><?= data.biz.payableTo ?></b>.

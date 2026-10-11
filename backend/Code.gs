@@ -103,7 +103,7 @@ const SHEETS = {
   prices: { name: 'Price List', cols: [['id', 'Item ID'], ['name', 'Item'], ['price', 'Price'], ['kind', 'Kind'], ['active', 'Active'], ['sort', 'Sort']] },
   clients: { name: 'Clients', cols: [['id', 'Client ID'], ['name', 'Name'], ['address', 'Address'], ['email', 'Email'], ['phone', 'Phone'], ['type', 'Service Type'], ['active', 'Active'], ['notes', 'Notes']] },
   work: { name: 'Work Log', cols: [['id', 'Entry ID'], ['date', 'Date'], ['clientId', 'Client ID'], ['clientName', 'Client'], ['itemId', 'Item ID'], ['description', 'Description'], ['qty', 'Qty'], ['unitPrice', 'Unit Price'], ['amount', 'Amount'], ['note', 'Note'], ['invoiceId', 'Invoice #'], ['voided', 'Voided'], ['loggedAt', 'Logged At']] },
-  invoices: { name: 'Invoices', cols: [['id', 'Invoice #'], ['clientId', 'Client ID'], ['clientName', 'Client'], ['email', 'Email'], ['invoiceDate', 'Invoice Date'], ['dueDate', 'Due Date'], ['total', 'Total'], ['paid', 'Paid'], ['balance', 'Balance'], ['status', 'Status'], ['sentAt', 'Emailed At'], ['reminderLevel', 'Reminders Sent'], ['pdfId', 'PDF File ID']] },
+  invoices: { name: 'Invoices', cols: [['id', 'Invoice #'], ['clientId', 'Client ID'], ['clientName', 'Client'], ['email', 'Email'], ['invoiceDate', 'Invoice Date'], ['dueDate', 'Due Date'], ['total', 'Total'], ['paid', 'Paid'], ['balance', 'Balance'], ['status', 'Status'], ['sentAt', 'Emailed At'], ['reminderLevel', 'Reminders Sent'], ['pdfId', 'PDF File ID'], ['message', 'Note To Client']] },
   payments: { name: 'Payments', cols: [['id', 'Payment ID'], ['date', 'Date'], ['invoiceId', 'Invoice #'], ['clientId', 'Client ID'], ['clientName', 'Client'], ['amount', 'Amount'], ['method', 'Method'], ['checkNo', 'Check #'], ['note', 'Note'], ['receiptSentAt', 'Receipt Emailed At']] },
   readings: { name: 'Readings', cols: [['id', 'Reading ID'], ['date', 'Date'], ['clientId', 'Client ID'], ['clientName', 'Client'], ['fc', 'Free Cl'], ['tc', 'Total Cl'], ['ph', 'pH'], ['ta', 'Alkalinity'], ['ch', 'Hardness'], ['cya', 'CYA'], ['ai', 'AI Read'], ['photoId', 'Photo File ID'], ['note', 'Note'], ['loggedAt', 'Logged At'], ['reportSentAt', 'Report Emailed At']] },
 };
@@ -514,7 +514,14 @@ function logWork_(p) {
     const rows = items.map(it => {
       const qty = Math.max(1, Math.round(Number(it.qty) || 1));
       let itemId, description, unitPrice;
-      if (it.itemId === 'CUSTOM') {
+      if (it.itemId === 'CREDIT') {
+        // Credits (discounts, barter like "laser engraver") are stored as negative amounts.
+        // They come off the client's next invoice; an invoice is never created for $0 or less.
+        itemId = 'CREDIT';
+        description = String(it.description || '').trim() || 'Credit';
+        unitPrice = -Math.abs(round2_(it.price));
+        if (!(unitPrice < 0)) throw new Error('Enter the credit amount.');
+      } else if (it.itemId === 'CUSTOM') {
         itemId = 'CUSTOM';
         description = String(it.description || '').trim();
         unitPrice = round2_(it.price);
@@ -1202,8 +1209,8 @@ function billSelected_(p) {
     const entries = readTable_(SHEETS.work).filter(w =>
       ids.indexOf(String(w.id)) >= 0 && String(w.clientId) === String(client.id) && !w.invoiceId && !toBool_(w.voided));
     if (entries.length !== ids.length) throw new Error('Some of those items were already billed or removed. Refresh and try again.');
-    const inv = createInvoice_(client, entries, s);
-    if (!inv) throw new Error('Nothing to bill: those items add up to $0.');
+    const inv = createInvoice_(client, entries, s, p.message);
+    if (!inv) throw new Error('Nothing to bill: credits cover those items. Check more work, or leave the credit for later.');
     return Object.assign(bootstrap_(), {
       billed: { id: String(inv.id), total: Number(inv.total), emailed: !!inv.sentAt, email: String(inv.email || '') },
     });
@@ -1227,10 +1234,11 @@ function collectUnbilled_(cutoff) {
 }
 
 /** Writes the invoice row, stamps the work entries, builds the PDF, emails it. Returns the invoice row. */
-function createInvoice_(client, entries, s) {
+/** message = optional personal note from Tommy, printed on the PDF and in the email. */
+function createInvoice_(client, entries, s, message) {
   entries.sort((a, b) => a.date - b.date);
   const total = sumAmounts_(entries);
-  if (total <= 0) return null;
+  if (total <= 0) return null;   // credits bigger than the work: nothing to bill, credit carries forward
 
   const number = Number(getSettings_().NEXT_INVOICE_NUMBER) || 1001;
   setSetting_('NEXT_INVOICE_NUMBER', String(number + 1));
@@ -1240,6 +1248,7 @@ function createInvoice_(client, entries, s) {
     id: number, clientId: String(client.id), clientName: String(client.name), email: String(client.email || '').trim(),
     invoiceDate, dueDate: addDays_(invoiceDate, Number(s.TERMS_DAYS) || 15),
     total, paid: 0, balance: total, status: 'Open', sentAt: '', reminderLevel: 0, pdfId: '',
+    message: String(message || '').trim().slice(0, 500),
   });
   entries.forEach(e => updateRow_(SHEETS.work, e._row, { invoiceId: number }));
 
@@ -1256,6 +1265,44 @@ function createInvoice_(client, entries, s) {
   });
   return inv;
 }
+
+/**
+ * Invoice lines in Tommy's style: weekly visits roll up to one line per month
+ * ("October Service: 9 visits"), everything else prints on its own dated line, credits as minus.
+ * Notes are Tommy's private service log and are deliberately left off client invoices.
+ */
+function invoiceLines_(entries) {
+  const lines = [];
+  const visitMonths = {};
+  entries.forEach(e => {
+    if (e.itemId === 'VISIT') {
+      const key = fmt_(e.date, 'yyyy-MM');
+      if (!visitMonths[key]) {
+        visitMonths[key] = { sortDate: e.date, month: fmt_(e.date, 'MMMM'), short: fmt_(e.date, 'MMM'), qty: 0, amount: 0, rates: {} };
+        lines.push(visitMonths[key]);
+      }
+      const g = visitMonths[key];
+      g.qty += Number(e.qty) || 1;
+      g.amount += Number(e.amount) || 0;
+      g.rates[round2_(e.unitPrice)] = true;
+    } else {
+      lines.push({ sortDate: e.date, single: e });
+    }
+  });
+  return lines.sort((a, b) => a.sortDate - b.sortDate).map(l => {
+    if (l.single) {
+      const e = l.single;
+      return { date: fmt_(e.date, 'MMM d'), description: String(e.description), note: '',
+        qty: Number(e.qty) || 1, rate: signedMoney_(e.unitPrice), amount: signedMoney_(e.amount) };
+    }
+    const rates = Object.keys(l.rates);
+    return { date: l.short, description: l.month + ' Service: ' + l.qty + ' visit' + (l.qty === 1 ? '' : 's'), note: '',
+      qty: l.qty, rate: rates.length === 1 ? money_(rates[0]) : '', amount: money_(l.amount) };
+  });
+}
+
+/** money_ with a leading minus for credits: -$400.00 */
+function signedMoney_(n) { return Number(n) < 0 ? '-' + money_(Math.abs(Number(n))) : money_(n); }
 
 /** Returns the saved PDF for an invoice, rebuilding it if the file is missing. */
 function getInvoicePdf_(inv, s) {
@@ -1288,11 +1335,8 @@ function buildInvoicePdf_(inv, client, entries, s) {
     invoiceDate: fmt_(inv.invoiceDate, 'MMM d, yyyy'),
     dueDate: fmt_(inv.dueDate, 'MMM d, yyyy'),
     terms: 'Net ' + daysBetween_(inv.invoiceDate, inv.dueDate),
-    lines: entries.map(e => ({
-      // Notes are Tommy's private service log and are deliberately left off client invoices.
-      date: fmt_(e.date, 'MMM d'), description: String(e.description), note: '',
-      qty: Number(e.qty) || 1, rate: money_(e.unitPrice), amount: money_(e.amount),
-    })),
+    lines: invoiceLines_(entries),
+    message: String(inv.message || '').trim(),
     total: money_(inv.total),
     paid: Number(inv.paid) > 0 ? money_(inv.paid) : '',
     balance: money_(inv.balance),
@@ -1322,6 +1366,7 @@ function sendInvoiceEmail_(inv, pdf, s) {
   const due = fmt_(inv.dueDate, 'EEEE, MMM d');
   const body = '<p>Hi ' + esc_(firstName_(inv.clientName)) + ',</p>' +
     '<p>Your invoice for pool service is attached.</p>' +
+    (String(inv.message || '').trim() ? '<p style="font-style:italic;color:#0b1f33">' + esc_(String(inv.message).trim()).replace(/\n/g, '<br>') + '</p>' : '') +
     summaryBox_([['Invoice', '#' + inv.id], ['Amount due', money_(inv.balance)], ['Due by', due]]) +
     howToPay_(s) + signoff_(s);
   sendClientEmail_(inv.email, 'Invoice #' + inv.id + ' from ' + s.BUSINESS_NAME + ': ' + money_(inv.balance) + ' due ' + fmt_(inv.dueDate, 'MMM d'),

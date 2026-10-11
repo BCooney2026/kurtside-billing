@@ -318,6 +318,7 @@
     clientId: '',
     items: {},      // itemId -> qty
     custom: null,   // { description, price } when "Other" is open
+    credit: null,   // { description, price } when "Credit" is open (saved as a negative amount)
     note: '',
     payMethod: 'Cash',
     busy: false,
@@ -327,7 +328,7 @@
   // ---------------- Helpers ----------------
   const $ = id => document.getElementById(id);
   const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const money = n => '$' + (Number(n) || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const money = n => { const v = Number(n) || 0; return (v < 0 ? '-$' : '$') + Math.abs(v).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ','); };
   const initials = name => String(name || '').trim().split(/\s+/).map(w => w[0]).slice(0, 2).join('').toUpperCase();
   function niceDate(ymd) {
     if (!ymd) return '';
@@ -452,6 +453,7 @@
     let t = 0;
     Object.keys(S.items).forEach(id => { const p = priceById(id); if (p) t += p.price * S.items[id]; });
     if (S.custom) t += Number(S.custom.price) || 0;
+    if (S.credit) t -= Math.abs(Number(S.credit.price) || 0);
     return t;
   }
 
@@ -459,7 +461,7 @@
     const d = S.data;
     const services = d.prices.filter(p => p.active && p.kind === 'Service');
     const extras = d.prices.filter(p => p.active && p.kind === 'Extra');
-    const canLog = S.clientId && (Object.keys(S.items).length || S.custom);
+    const canLog = S.clientId && (Object.keys(S.items).length || S.custom || S.credit);
     const picked = S.clientId ? clientById(S.clientId) : null;
     const anyClients = d.clients.some(c => c.active);
     const lastNote = S.clientId && d.lastNotes ? d.lastNotes[S.clientId] : null;
@@ -511,6 +513,7 @@
       <div class="chips">
         ${extras.map(chip).join('')}
         <button class="chip ${S.custom ? 'sel' : ''}" onclick="toggleCustom()">+ Other</button>
+        <button class="chip ${S.credit ? 'sel' : ''}" onclick="toggleCredit()">&minus; Credit</button>
       </div>
       ${S.custom ? `
         <div class="card" style="margin-top:12px">
@@ -518,6 +521,14 @@
             <input class="input" id="customDesc" value="${esc(S.custom.description)}" placeholder="Chemicals, part, repair..." oninput="S.custom.description = this.value"></label>
           <label class="field" style="margin:0"><span>Charge</span>
             <input class="input" id="customPrice" type="number" inputmode="decimal" step="0.01" value="${esc(S.custom.price)}" placeholder="0.00" oninput="S.custom.price = this.value; updateLogButton()"></label>
+        </div>` : ''}
+      ${S.credit ? `
+        <div class="card" style="margin-top:12px">
+          <label class="field"><span>Credit for</span>
+            <input class="input" id="creditDesc" value="${esc(S.credit.description)}" placeholder="Discount, trade, overpayment..." oninput="S.credit.description = this.value"></label>
+          <label class="field" style="margin:0"><span>Amount off</span>
+            <input class="input" id="creditPrice" type="number" inputmode="decimal" step="0.01" min="0" value="${esc(S.credit.price)}" placeholder="0.00" oninput="S.credit.price = this.value; updateLogButton()"></label>
+          <div class="muted" style="margin-top:8px">Comes off this client's next bill.</div>
         </div>` : ''}
 
       <div class="lbl">Service notes</div>
@@ -559,7 +570,7 @@
   const logButtonText = ok => ok ? 'Log it  ' + money(logTotal()) : 'Log it';
 
   function updateLogButton() {
-    const ok = S.clientId && (Object.keys(S.items).length || S.custom);
+    const ok = S.clientId && (Object.keys(S.items).length || S.custom || S.credit);
     $('logBtn').disabled = !ok;
     $('logBtn').textContent = logButtonText(ok);
   }
@@ -606,6 +617,12 @@
     renderLog();
   }
 
+  function toggleCredit() {
+    S.credit = S.credit ? null : { description: '', price: '' };
+    renderLog();
+    if (S.credit) $('creditDesc').focus();
+  }
+
   function toggleCustom() {
     S.custom = S.custom ? null : { description: '', price: '' };
     renderLog();
@@ -616,11 +633,12 @@
     const client = clientById(S.clientId);
     const items = Object.keys(S.items).map(id => ({ itemId: id, qty: S.items[id] }));
     if (S.custom) items.push({ itemId: 'CUSTOM', description: S.custom.description, price: S.custom.price, qty: 1 });
+    if (S.credit) items.push({ itemId: 'CREDIT', description: S.credit.description, price: Math.abs(Number(S.credit.price) || 0), qty: 1 });
     const total = logTotal();
     const ok = await run('logWork', { date: S.date, clientId: S.clientId, items, note: S.note },
       'Logged ' + (client ? client.name.split(' ')[0] : '') + ': ' + money(total));
     if (ok) {
-      S.clientId = ''; S.items = {}; S.custom = null; S.note = '';
+      S.clientId = ''; S.items = {}; S.custom = null; S.credit = null; S.note = '';
       renderLog();
     }
   }
@@ -1002,7 +1020,9 @@
             <div class="amt">${money(u.amount)}</div>
           </label>`).join('') : '<div class="empty">Nothing waiting to be billed.</div>'}
       </div>
-      ${A.unbilled.length ? `<button class="btn gold big" id="billBtn" style="margin-top:12px" onclick="billChecked()"></button>
+      ${A.unbilled.length ? `<label class="field" style="margin-top:12px"><span>Note on the invoice (optional)</span>
+          <textarea class="input" id="billNote" style="min-height:64px" placeholder="Thanks pal! See you in the spring."></textarea></label>
+        <button class="btn gold big" id="billBtn" style="margin-top:4px" onclick="billChecked()"></button>
         <div class="muted" style="margin:8px 2px 0">Unchecked items stay here for later. Anything still here on the 1st bills automatically.</div>` : ''}
 
       <div class="sec">Open invoices</div>
@@ -1038,8 +1058,10 @@
     if (!btn) return;
     const items = checkedItems();
     const total = items.reduce((t, i) => t + Number(i.dataset.amt), 0);
-    btn.disabled = !items.length;
-    btn.textContent = items.length ? `Bill ${items.length} item${items.length === 1 ? '' : 's'}  ${money(total)}` : 'Check items to bill';
+    btn.disabled = !items.length || total <= 0;
+    btn.textContent = !items.length ? 'Check items to bill'
+      : total <= 0 ? 'Credits cover this. Check more work.'
+      : `Bill ${items.length} item${items.length === 1 ? '' : 's'}  ${money(total)}`;
   }
 
   async function billChecked() {
@@ -1050,7 +1072,7 @@
     if (!confirm(`Create one invoice for ${money(total)} ${how}?`)) return;
     setBusy(true, 'Creating invoice...');
     try {
-      const res = await call('billSelected', { clientId: c.id, entryIds: items.map(i => i.value) });
+      const res = await call('billSelected', { clientId: c.id, entryIds: items.map(i => i.value), message: $('billNote') ? $('billNote').value : '' });
       if (res && res.clients) { S.data = res; render(); }
       const b = res.billed;
       toast(b.emailed ? `Invoice #${b.id} sent to ${b.email}` : `Invoice #${b.id} created. Hand them the PDF.`);
