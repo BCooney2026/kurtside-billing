@@ -43,12 +43,14 @@
  *   The app asks for APP_PIN (Settings tab) once per device and remembers it.
  *
  * RUN BY HAND FROM THE EDITOR (only if needed)
- *   setup, sendPreview, runBilling, sendDigest
+ *   setup, testBillsEmail, sendPreview, runBilling, sendDigest
  *
  * AUTOMATION (one daily trigger at ~7am runs dailyJob)
- *   PREVIEW_DAY   Tommy gets "here is what bills on the 1st"
- *   BILLING_DAY   Every client with unbilled work dated before this
- *                 month gets one invoice, emailed with a PDF
+ *   BILLING_DAY   Tommy gets the "bills are ready" email with a button that opens
+ *                 the app on Send Bills. He picks who gets one and taps Send.
+ *                 If anything is still unsent, the email goes again 3 and 7 days later.
+ *                 (Set AUTO_BILLING to TRUE on the Settings tab to bill automatically
+ *                 instead; then PREVIEW_DAY sends the "here is what bills" email.)
  *   Every day     Overdue reminders to clients at REMINDER_DAYS past due (14, 30).
  *                 Before the first one, the app asks Tommy "Did these pay you?" so a
  *                 client who paid cash is never nagged.
@@ -126,7 +128,8 @@ const DEFAULT_SETTINGS = [
   ['MAILING_ADDRESS', '', 'Where checks can be mailed. Blank = hand to Tommy only'],
   ['TERMS_DAYS', '15', 'Invoice is due this many days after it is sent'],
   ['PREVIEW_DAY', '28', 'Day of month Tommy gets the preview email (must be later in the month than BILLING_DAY)'],
-  ['BILLING_DAY', '1', 'Day of month invoices are created and emailed (1 to 28)'],
+  ['BILLING_DAY', '1', 'Day of month Tommy is reminded to send bills (1 to 28)'],
+  ['AUTO_BILLING', 'FALSE', 'TRUE bills everyone automatically on BILLING_DAY. FALSE emails Tommy to send them himself'],
   ['REMINDER_DAYS', '14,30', 'Reminder emails go to clients this many days past due. Tommy sees late invoices in the app first'],
   ['AUTOMATION_PAUSED', 'FALSE', 'TRUE stops invoices and reminders. Previews and digests still go to Tommy'],
   ['INVOICE_FOLDER_ID', '', 'Set by setup(). Drive folder that holds invoice PDFs'],
@@ -334,8 +337,15 @@ function dailyJob() {
   const day = now.getDate();
   const paused = toBool_(s.AUTOMATION_PAUSED);
 
-  safely_('preview', () => { if (day === Number(s.PREVIEW_DAY)) sendPreview(); });
-  safely_('billing', () => { if (!paused && day === Number(s.BILLING_DAY)) runBilling(); });
+  const auto = toBool_(s.AUTO_BILLING);
+  const billDay = Number(s.BILLING_DAY) || 1;
+  if (auto) {
+    safely_('preview', () => { if (day === Number(s.PREVIEW_DAY)) sendPreview(); });
+    safely_('billing', () => { if (!paused && day === billDay) runBilling(); });
+  } else {
+    // Bill day, then two follow-ups only if bills are still sitting unsent.
+    safely_('bill reminder', () => { if ([0, 3, 7].indexOf(day - billDay) >= 0) sendBillsReadyEmail(day - billDay); });
+  }
   safely_('reminders', () => { if (!paused) runReminders(); });
   safely_('digest', () => { if (now.getDay() === 1) sendDigest(); });
   PropertiesService.getScriptProperties().setProperty(PROP_LAST_DAILY, now.toISOString());
@@ -464,7 +474,7 @@ function api(pin, action, payload) {
     recordPayment: recordPayment_, resendInvoice: resendInvoice_,
     saveClient: saveClient_, savePrice: savePrice_, saveSettings: saveSettings_,
     readStrip: readStrip_, saveReading: saveReading_, dashboard: dashboard_,
-    clientAccount: clientAccount_, billSelected: billSelected_, approveBilling: approveBilling_,
+    clientAccount: clientAccount_, billSelected: billSelected_, sendBills: sendBills_,
   };
   const handler = handlers[action];
   if (!handler) throw new Error('Unknown action: ' + action);
@@ -525,7 +535,7 @@ function bootstrap_() {
     readings: readingsByClient_(12),
     stripReader: !!PropertiesService.getScriptProperties().getProperty(PROP_API_KEY),
     reminderDays: reminderLevels_(s),
-    billingCheck: billingCheck_(s, work),
+    readyBills: readyBills_(work, invoices),
   };
 }
 
@@ -571,53 +581,159 @@ const OTHER_STARTERS = [
  *   [{ ids, date, clientName, items: 'Weekly Service Visit, Backwash...', amount, note, billed, invoiceIds }]
  * billed: 'all' | 'some' | ''. Remove only ever voids the unbilled lines of a job.
  */
-const PROP_BILL_OK = 'BILLING_CHECKED';   // { period: 'yyyy-MM', total } once Tommy taps "Looks good"
+const APP_URL = 'https://bcooney2026.github.io/kurtside-billing/';
 
 /**
- * The in-app version of the preview email: from PREVIEW_DAY until bills go out, the Log tab shows
- * who bills on the next BILLING_DAY and for how much. Same rules as runBilling: unbilled work dated
- * before the 1st of next month, one invoice per client, nothing when credits cover it. Returns null
- * outside that window. "Looks good" only hides the banner; bills go out either way.
+ * Bills ready to send: unbilled work dated before the 1st of this month, one row per client,
+ * skipping anyone whose credits cover it. Same rules runBilling uses. Null when nothing is waiting.
+ * Drives the Log tab card, the Send Bills screen, and the bill-day email.
  */
-function billingCheck_(s, work) {
-  const now = new Date();
-  if (now.getDate() < (Number(s.PREVIEW_DAY) || 28)) return null;
-  const cutoff = new Date(now.getFullYear(), now.getMonth() + 1, 1);
-  const billDate = nextDayOfMonth_(Number(s.BILLING_DAY) || 1);
+function readyBills_(work, invoices, cutoff) {
+  cutoff = cutoff || startOfMonth_(new Date());
   const emails = {};
   readTable_(SHEETS.clients).forEach(c => { emails[String(c.id)] = String(c.email || '').trim(); });
   const groups = {};
   work.forEach(w => {
     if (w.invoiceId || toBool_(w.voided) || !(w.date instanceof Date) || w.date >= cutoff) return;
     const k = String(w.clientId);
-    const g = groups[k] = groups[k] || { id: k, name: String(w.clientName), total: 0, count: 0 };
+    const g = groups[k] = groups[k] || { id: k, name: String(w.clientName), total: 0, count: 0, first: w.date };
     g.total += Number(w.amount) || 0;
     g.count += 1;
+    if (w.date < g.first) g.first = w.date;
   });
-  const clients = Object.keys(groups).map(k => groups[k])
-    .map(g => ({ id: g.id, name: g.name, total: round2_(g.total), count: g.count, noEmail: !emails[g.id] }))
-    .filter(g => g.total > 0)
-    .sort((a, b) => a.name.localeCompare(b.name));
-  const total = round2_(clients.reduce((t, c) => t + c.total, 0));
-  const period = fmt_(billDate, 'yyyy-MM');
-  let ok = null;
-  try { ok = JSON.parse(PropertiesService.getScriptProperties().getProperty(PROP_BILL_OK) || 'null'); } catch (e) { ok = null; }
+  const clients = Object.keys(groups).map(k => groups[k]).filter(g => round2_(g.total) > 0)
+    .sort((a, b) => a.name.localeCompare(b.name, 'en', { sensitivity: 'base' }));
+  if (!clients.length) return null;
+  const owed = (invoices || []).filter(i => i.status === 'Open');
   return {
-    billDate: ymd_(billDate), clients, total,
-    // Checked only for this billing period and this exact total: logging more work brings the banner back.
-    checked: !!(ok && ok.period === period && Number(ok.total) === total),
-    paused: toBool_(s.AUTOMATION_PAUSED),
+    month: fmt_(addDays_(cutoff, -1), 'MMMM'),
+    total: round2_(clients.reduce((t, c) => t + c.total, 0)),
+    clients: clients.map(c => ({ id: c.id, name: c.name, total: round2_(c.total), count: c.count, noEmail: !emails[c.id] })),
+    alreadyOwed: round2_(owed.reduce((t, i) => t + (Number(i.balance) || 0), 0)),
+    alreadyOwedCount: owed.length,
   };
 }
 
-/** "Looks good" on the billing check. Remembers the period and total, nothing else. */
-function approveBilling_() {
-  const check = billingCheck_(getSettings_(), readTable_(SHEETS.work));
-  if (check) {
-    PropertiesService.getScriptProperties().setProperty(PROP_BILL_OK,
-      JSON.stringify({ period: check.billDate.slice(0, 7), total: check.total }));
-  }
-  return bootstrap_();
+/**
+ * Send Bills: one invoice per chosen client for their ready work (dated before this month),
+ * emailed with the PDF when they have an email. p = { clientIds: [...] }.
+ */
+function sendBills_(p) {
+  return withLock_(() => {
+    const s = getSettings_();
+    const ids = (Array.isArray(p && p.clientIds) ? p.clientIds : []).map(String);
+    if (!ids.length) throw new Error('Pick at least one client.');
+    const groups = collectUnbilled_(startOfMonth_(new Date()));
+    const clients = indexBy_(readTable_(SHEETS.clients), 'id');
+    const created = [];
+    ids.forEach(id => {
+      if (!groups[id] || !clients[id]) return;
+      const inv = createInvoice_(clients[id], groups[id], s);
+      if (inv) created.push(inv);
+    });
+    if (!created.length) throw new Error('Nothing to send. Those were already billed, or credits cover them.');
+    safely_('billing summary', () => sendBillingSummary_(created, s));
+    return Object.assign(bootstrap_(), {
+      sent: {
+        count: created.length,
+        total: round2_(created.reduce((t, i) => t + Number(i.total), 0)),
+        handOver: created.filter(i => !i.sentAt).map(i => String(i.clientName)),
+      },
+    });
+  });
+}
+
+/**
+ * The bill-day email to Tommy. nudge = days since bill day (0, 3 or 7). Sends nothing when
+ * every bill is already out, so the follow-ups stop as soon as he taps Send.
+ */
+function sendBillsReadyEmail(nudge) {
+  nudge = Number(nudge) || 0;
+  const s = getSettings_();
+  const invoices = readTable_(SHEETS.invoices).map(i => invoiceToClient_(i, new Date()));
+  const ready = readyBills_(readTable_(SHEETS.work), invoices);
+  if (!ready) return false;
+  const n = ready.clients.length;
+  const subject = nudge
+    ? '\u23F0 Still not sent: ' + money_(ready.total) + ' in ' + ready.month + ' bills'
+    : '\uD83D\uDCB0 ' + ready.month + ' bills are ready: ' + money_(ready.total) + '. Tap to send';
+  MailApp.sendEmail({
+    to: ownerEmail_(s),
+    name: 'Kurtside Billing',
+    subject: subject,
+    htmlBody: billsReadyHtml_(ready, nudge, s),
+  });
+  return true;
+}
+
+/**
+ * Run by hand from the editor to see the bill-day email today. Uses ALL unbilled work (not just last
+ * month's) and sends to REPORT_EMAIL, or the owner if that is blank. Nothing is billed.
+ */
+function testBillsEmail() {
+  const s = getSettings_();
+  const invoices = readTable_(SHEETS.invoices).map(i => invoiceToClient_(i, new Date()));
+  const ready = readyBills_(readTable_(SHEETS.work), invoices, addDays_(stripTime_(new Date()), 1));
+  if (!ready) { console.log('Nothing unbilled, so there is nothing to show. Log a job first.'); return; }
+  const to = String(s.REPORT_EMAIL || '').trim() || ownerEmail_(s);
+  MailApp.sendEmail({ to: to, name: 'Kurtside Billing', subject: '[TEST] \uD83D\uDCB0 ' + ready.month + ' bills are ready: ' + money_(ready.total),
+    htmlBody: billsReadyHtml_(ready, 0, s) });
+  console.log('Test email sent to ' + to);
+}
+
+/** Big, bold, phone-first HTML for the bill-day email. Tables and inline styles so Gmail keeps the look. */
+function billsReadyHtml_(r, nudge, s) {
+  const gold = '#e3bd6a', navy = '#06111d', card = '#0e2235', ink = '#eef3f8', muted = '#8fa4b9', aqua = '#29b6e8', red = '#ff8a8a';
+  const link = APP_URL + '?bills=1';
+  const n = r.clients.length;
+  const eyebrow = nudge ? 'STILL WAITING &middot; DAY ' + (nudge + 1) : 'BILL DAY';
+  const headline = nudge
+    ? esc_(r.month) + '\u2019s money is still sitting there.'
+    : esc_(r.month) + '\u2019s money is on the table.';
+  const sub = nudge
+    ? 'Nobody pays a bill they never got. Two taps and it\u2019s out the door.'
+    : 'You did the work. Now go get paid. Two taps and it\u2019s done.';
+  const button = (label) =>
+    '<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin:0 auto"><tr>' +
+    '<td align="center" bgcolor="' + gold + '" style="border-radius:14px;background:' + gold + ';background-image:linear-gradient(180deg,#f3d58f,#c99a3e);box-shadow:0 8px 24px rgba(227,189,106,.35)">' +
+    '<a href="' + link + '" style="display:inline-block;padding:18px 34px;font-family:Arial,Helvetica,sans-serif;font-size:18px;font-weight:900;letter-spacing:1px;color:#1a1204;text-decoration:none;border-radius:14px">' +
+    label + ' &rarr;</a></td></tr></table>';
+  const rows = r.clients.map((c, i) =>
+    '<tr><td style="padding:14px 0;border-top:' + (i ? '1px solid rgba(255,255,255,.07)' : '0') + '">' +
+      '<div style="font-size:16px;font-weight:800;color:' + ink + '">' + esc_(c.name) + '</div>' +
+      '<div style="font-size:13px;color:' + muted + ';padding-top:2px">' + c.count + ' item' + (c.count === 1 ? '' : 's') +
+      (c.noEmail ? ' &middot; <span style="color:' + gold + '">No email: hand it over</span>' : '') + '</div></td>' +
+    '<td align="right" style="padding:14px 0;border-top:' + (i ? '1px solid rgba(255,255,255,.07)' : '0') + ';font-size:17px;font-weight:800;color:' + ink + ';white-space:nowrap">' + money_(c.total) + '</td></tr>').join('');
+  const owedLine = r.alreadyOwedCount
+    ? '<tr><td style="padding:0 28px 26px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:rgba(41,182,232,.08);border:1px solid rgba(41,182,232,.25);border-radius:14px">' +
+      '<tr><td style="padding:14px 18px;font-size:14px;color:' + ink + '">Already out and unpaid: <b>' + money_(r.alreadyOwed) + '</b> on ' + r.alreadyOwedCount +
+      ' invoice' + (r.alreadyOwedCount === 1 ? '' : 's') + '. Check the Money tab.</td></tr></table></td></tr>'
+    : '';
+
+  return '<!doctype html><html><body style="margin:0;padding:0;background:' + navy + '">' +
+    '<div style="display:none;max-height:0;overflow:hidden;opacity:0">' + money_(r.total) + ' ready for ' + n + ' client' + (n === 1 ? '' : 's') + '. Tap Send Bills.</div>' +
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="' + navy + '" style="background:' + navy + '"><tr><td align="center" style="padding:0 10px 30px">' +
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;font-family:Arial,Helvetica,sans-serif">' +
+      '<tr><td style="padding:0"><a href="' + link + '"><img src="' + APP_URL + 'banner.png" width="600" alt="Kurtside Pool Co." style="display:block;width:100%;max-width:600px;height:auto;border:0"></a></td></tr>' +
+      '<tr><td bgcolor="' + card + '" style="background:' + card + ';background-image:linear-gradient(180deg,#12304a,' + card + ');border:1px solid rgba(227,189,106,.22);border-radius:22px">' +
+      '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">' +
+        '<tr><td align="center" style="padding:30px 28px 0;font-size:12px;font-weight:800;letter-spacing:4px;color:' + (nudge ? red : aqua) + '">' + eyebrow + '</td></tr>' +
+        '<tr><td align="center" style="padding:10px 28px 0;font-family:Georgia,\'Times New Roman\',serif;font-size:30px;line-height:1.2;font-weight:bold;color:' + ink + '">' + headline + '</td></tr>' +
+        '<tr><td align="center" style="padding:20px 28px 0;font-family:Georgia,\'Times New Roman\',serif;font-size:58px;line-height:1;font-weight:bold;color:' + gold + '">' + money_(r.total) + '</td></tr>' +
+        '<tr><td align="center" style="padding:10px 28px 0;font-size:15px;color:' + muted + '">' + n + ' client' + (n === 1 ? '' : 's') + ' ready to bill</td></tr>' +
+        '<tr><td align="center" style="padding:28px 28px 8px">' + button('SEND ' + esc_(r.month.toUpperCase()) + ' BILLS') + '</td></tr>' +
+        '<tr><td align="center" style="padding:6px 28px 28px;font-size:14px;color:' + muted + '">' + sub + '</td></tr>' +
+        '<tr><td style="padding:0 28px"><div style="height:1px;background:linear-gradient(90deg,transparent,rgba(227,189,106,.5),transparent);background-color:rgba(227,189,106,.25)"></div></td></tr>' +
+        '<tr><td style="padding:22px 28px 6px;font-family:Georgia,\'Times New Roman\',serif;font-size:13px;font-weight:bold;letter-spacing:3px;color:' + gold + '">WHO&rsquo;S GETTING ONE</td></tr>' +
+        '<tr><td style="padding:0 28px 18px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">' + rows +
+          '<tr><td style="padding:16px 0 0;border-top:1px solid rgba(227,189,106,.35);font-size:15px;font-weight:800;color:' + gold + '">TOTAL</td>' +
+          '<td align="right" style="padding:16px 0 0;border-top:1px solid rgba(227,189,106,.35);font-size:19px;font-weight:900;color:' + gold + '">' + money_(r.total) + '</td></tr>' +
+        '</table></td></tr>' +
+        '<tr><td align="center" style="padding:8px 28px 26px;font-size:13px;color:' + muted + '">Want to skip someone or fix a line? Open it, uncheck them, then send the rest.</td></tr>' +
+        owedLine +
+      '</table></td></tr>' +
+      '<tr><td align="center" style="padding:24px 10px 0;font-family:Georgia,\'Times New Roman\',serif;font-size:11px;letter-spacing:4px;color:#7d6a3f">MAINTENANCE &middot; OPENINGS &middot; CLOSINGS</td></tr>' +
+    '</table></td></tr></table></body></html>';
 }
 
 function recentJobs_(work, n, invoices) {

@@ -406,6 +406,7 @@
     if (await run('bootstrap')) {
       savePin(pin);
       $('pinGate').classList.remove('on');
+      afterBoot();
     }
   }
 
@@ -490,11 +491,11 @@
           <div class="money-big">${money(d.unbilledTotal)}</div>
         </div>
         <div style="text-align:right">
-          <div class="k">Bills go out</div>
+          <div class="k">Bill day</div>
           <div class="when">${niceDate(d.nextBilling)}</div>
         </div>
       </div>
-      ${billingCheckCard()}
+      ${readyCard()}
       ${lateCard()}
 
       <div class="lbl">Who</div>
@@ -682,49 +683,69 @@
   }
 
   // ----- Heads up cards on the Log tab -----
-  /**
-   * From the 28th until bills go out: who bills on the 1st and for how much, right where Tommy logs.
-   * "Looks good" just hides it (bills go out either way); logging more work brings it back.
-   */
-  function billingCheckCard() {
-    const b = S.data.billingCheck;
-    if (!b || !b.clients.length) return '';
-    const n = b.clients.length;
-    if (b.checked) return `<div class="muted" style="margin:12px 4px 0">&#10003; You checked the ${niceDate(b.billDate)} bills (${money(b.total)}). <a href="#" onclick="showBills(); return false" style="color:var(--gold)">Look again</a></div>`;
+  /** Shows while last month's work is waiting to be billed. Tommy sends bills himself (email reminds him). */
+  function readyCard() {
+    const r = S.data.readyBills;
+    if (!r) return '';
+    const n = r.clients.length;
     return `
       <div class="card heads">
-        <h4>Bills go out ${niceDate(b.billDate)}</h4>
-        <div class="muted">${n} client${n === 1 ? '' : 's'} &middot; <b style="color:var(--ink)">${money(b.total)}</b>. Give it a quick look before it sends.</div>
-        ${b.paused ? '<div style="color:#ffa3a3;margin-top:6px">Automation is paused, so nothing will send until you turn it back on in Settings.</div>' : ''}
-        <div class="row" style="margin-top:12px">
-          <button class="btn ghost grow" onclick="showBills()">Show me</button>
-          <button class="btn gold grow" onclick="approveBills()">Looks good</button>
-        </div>
+        <h4>${esc(r.month)} bills are ready</h4>
+        <div class="muted">${n} client${n === 1 ? '' : 's'} &middot; <b style="color:var(--ink)">${money(r.total)}</b>. Nobody gets one until you send it.</div>
+        <button class="btn gold big" style="margin-top:12px" onclick="openSendBills()">Send ${esc(r.month)} bills</button>
       </div>`;
   }
 
-  function showBills() {
-    const b = S.data.billingCheck;
+  /** Send Bills: everyone checked, uncheck to skip, tap a name to see the lines. */
+  function openSendBills() {
+    const r = S.data.readyBills;
+    if (!r) { toast('Nothing waiting to bill. You are all caught up.'); return; }
     openSheet(`
-      <h3>Going out ${niceDate(b.billDate)}</h3>
-      <div class="muted" style="margin:-6px 0 12px">Tap a client to see every line. Fix anything wrong there.</div>
-      <div class="card list">
-        ${b.clients.map(c => `
-          <div class="item row acct" onclick="closeSheet(); openAccount('${esc(c.id)}')">
-            <div class="grow"><div style="font-weight:800">${esc(c.name)}</div>
-              <div class="muted">${c.count} item${c.count === 1 ? '' : 's'}${c.noEmail ? ' &middot; <span style="color:var(--gold)">No email: hand it over</span>' : ''}</div></div>
-            <div class="amt">${money(c.total)}</div><span class="chev">&rsaquo;</span>
-          </div>`).join('')}
-        <div class="item row"><div class="grow" style="font-weight:800">Total</div><div class="amt" style="font-weight:800">${money(b.total)}</div></div>
+      <h3>Send ${esc(r.month)} bills</h3>
+      <div class="muted" style="margin:-6px 0 12px">Uncheck anyone to skip for now. Tap a name to see every line.</div>
+      <div class="card list" style="padding:4px 14px">
+        ${r.clients.map(c => `
+          <label class="pick">
+            <input type="checkbox" value="${esc(c.id)}" data-amt="${c.total}" checked onchange="updateSendBtn()">
+            <div class="grow" onclick="event.preventDefault(); event.stopPropagation(); closeSheet(); openAccount('${esc(c.id)}')">
+              <div style="font-weight:800">${esc(c.name)} <span style="color:var(--gold)">&rsaquo;</span></div>
+              <div class="muted">${c.count} item${c.count === 1 ? '' : 's'}${c.noEmail ? ' &middot; <span style="color:var(--gold)">No email: hand it over</span>' : ''}</div>
+            </div>
+            <div class="amt">${money(c.total)}</div>
+          </label>`).join('')}
       </div>
-      <div class="row" style="margin-top:14px">
-        <button class="btn ghost grow" onclick="closeSheet()">Close</button>
-        ${b.checked ? '' : '<button class="btn gold grow" onclick="closeSheet(); approveBills()">Looks good</button>'}
-      </div>`);
+      <button class="btn gold big" id="sendBtn" style="margin-top:14px" onclick="sendChecked()"></button>
+      <button class="btn ghost big" style="margin-top:8px" onclick="closeSheet()">Not now</button>`);
+    updateSendBtn();
   }
 
-  function approveBills() {
-    run('approveBilling', null, 'Got it. They go out ' + niceDate(S.data.billingCheck.billDate) + '.');
+  function sendChecked_() { return [...document.querySelectorAll('#sheet .pick input:checked')]; }
+
+  function updateSendBtn() {
+    const btn = $('sendBtn');
+    if (!btn) return;
+    const on = sendChecked_();
+    const total = on.reduce((t, i) => t + Number(i.dataset.amt), 0);
+    btn.disabled = !on.length;
+    btn.textContent = on.length ? `Send ${on.length} bill${on.length === 1 ? '' : 's'}  ${money(total)}` : 'Check who gets one';
+  }
+
+  async function sendChecked() {
+    const ids = sendChecked_().map(i => i.value);
+    if (!ids.length || S.busy) return;
+    if (!confirm(`Send ${ids.length} bill${ids.length === 1 ? '' : 's'} now?`)) return;
+    setBusy(true, `Sending ${ids.length} bill${ids.length === 1 ? '' : 's'}... a few seconds each`);
+    try {
+      const res = await call('sendBills', { clientIds: ids });
+      S.data = res; closeSheet(); showTab('money'); render();
+      const t = res.sent;
+      toast(`Sent ${t.count} bill${t.count === 1 ? '' : 's'} for ${money(t.total)}` +
+        (t.handOver.length ? `. Hand deliver: ${t.handOver.join(', ')}` : ''));
+    } catch (e) {
+      if (!(e && e.message === 'WRONG_PIN')) toast((e && e.message) || String(e), true);
+    } finally {
+      setBusy(false);
+    }
   }
 
   // "Not yet" hides a late invoice on this phone for a week. Browser storage can be missing, so it is optional.
@@ -1008,9 +1029,10 @@
     const mo = new Date().getMonth();
     if (mo >= 8 && mo <= 10 && w.closingsLeft.length) out.push(['watch', `Closing season: ${w.closingsLeft.length} pool${w.closingsLeft.length === 1 ? '' : 's'} still to close`]);
     if (sy.unpricedItems.length) out.push(['fix', `No price set for ${sy.unpricedItems.map(esc).join(', ')}. Settings > Prices.`]);
-    if (!sy.ownerEmailSet) out.push(['watch', 'Your email is blank in Settings, so previews and invoice copies are going nowhere useful']);
+    if (!sy.ownerEmailSet) out.push(['watch', 'Your email is blank in Settings, so the bill-day reminder and invoice copies are going nowhere useful']);
     if (sy.missingEmails) out.push(['watch', `${sy.missingEmails} client${sy.missingEmails === 1 ? ' has' : 's have'} no email: their bills must be handed over`]);
-    if (sy.paused) out.push(['fix', 'Automation is paused: no invoices or reminders will go out']);
+    if (S.data.readyBills) out.push(['fix', `${esc(S.data.readyBills.month)} bills not sent yet: ${money(S.data.readyBills.total)}. Log tab > Send bills.`]);
+    if (sy.paused) out.push(['fix', 'Automation is paused: late reminders will not go to clients']);
     if (sy.lastDailyHoursAgo !== null && sy.lastDailyHoursAgo > 30) out.push(['fix', `The 7am daily job last ran ${sy.lastDailyHoursAgo} hours ago`]);
     return out;
   }
@@ -1151,7 +1173,7 @@
       <div class="lbl">System</div>
       <div class="card"><div class="sysgrid">
         <div><span>Next preview</span>${niceDate(sy.nextPreview)}</div>
-        <div><span>Next billing</span>${niceDate(sy.nextBilling)}</div>
+        <div><span>Bill day reminder</span>${niceDate(sy.nextBilling)}</div>
         <div><span>Automation</span>${sy.paused ? '<span style="color:#ffa3a3">Paused</span>' : '<span style="color:var(--green)">On</span>'}</div>
         <div><span>Daily job</span>${sy.lastDailyRun ? esc(sy.lastDailyRun) : 'Not run yet'}</div>
         <div><span>Emails this month</span>${plural(sy.invoicesEmailed, 'invoice')} &middot; ${plural(sy.receiptsEmailed, 'receipt')} &middot; ${plural(sy.reportsEmailed, 'report')}</div>
@@ -1202,7 +1224,7 @@
       ${A.unbilled.length ? `<label class="field" style="margin-top:12px"><span>Note on the invoice (optional)</span>
           <textarea class="input" id="billNote" style="min-height:64px" placeholder="Thanks pal! See you in the spring."></textarea></label>
         <button class="btn gold big" id="billBtn" style="margin-top:4px" onclick="billChecked()"></button>
-        <div class="muted" style="margin:8px 2px 0">Unchecked items stay here for later. Anything still here on the 1st bills automatically.</div>` : ''}
+        <div class="muted" style="margin:8px 2px 0">Unchecked items stay here for later. You get a reminder on bill day for anything still here.</div>` : ''}
 
       <div class="sec">Open invoices</div>
       <div class="card list">
@@ -1418,7 +1440,7 @@
         <label class="field"><span>Pool reports go to</span><input class="input" id="setReport" type="email" value="${esc(st.REPORT_EMAIL)}" placeholder="Blank = no report emails"></label>
         <div class="muted" style="margin:-4px 2px 14px">Strip reader: ${d.stripReader ? '<span style="color:var(--green)">on</span>' : 'off (type readings by hand)'}</div>
         <div class="switch">
-          <div><div style="font-weight:800">Pause automation</div><div class="muted">Stops invoices and reminders from sending</div></div>
+          <div><div style="font-weight:800">Pause automation</div><div class="muted">Stops late reminders from going to clients</div></div>
           <input type="checkbox" id="setPaused" ${st.AUTOMATION_PAUSED ? 'checked' : ''}>
         </div>
         <button class="btn gold" style="width:100%" onclick="saveSettings()">Save business info</button>
@@ -1488,9 +1510,17 @@
   }
 
   // ---------------- Start ----------------
+  /** The bill-day email links here with ?bills=1: land straight on Send Bills. */
+  function afterBoot() {
+    if (new URLSearchParams(location.search).get('bills') !== '1') return;
+    history.replaceState(null, '', location.pathname);
+    showTab('log');
+    openSendBills();
+  }
+
   S.pin = loadPin();
   if (S.pin) {
-    run('bootstrap');
+    run('bootstrap').then(ok => { if (ok) afterBoot(); });
   } else {
     showPinScreen();
   }
