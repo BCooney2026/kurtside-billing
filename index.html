@@ -615,6 +615,9 @@
     S.clientId = id;
     const c = clientById(id);
     const visit = priceById('VISIT');
+    // Drop anything this client can't get (e.g. a Weekly Visit carried over to an open/close client).
+    const allowed = new Set(orderedChoices(S.data.prices, c).map(p => p.id));
+    Object.keys(S.items).forEach(k => { if (!allowed.has(k)) delete S.items[k]; });
     // Weekly clients default to a visit so the common case is: pick client, Log it.
     if (c && c.type === 'Weekly' && !Object.keys(S.items).length && !S.custom && visit && visit.active && visit.price > 0) {
       S.items = { VISIT: 1 };
