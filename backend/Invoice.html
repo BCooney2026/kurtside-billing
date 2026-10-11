@@ -16,8 +16,6 @@
   .serif { font-family: Georgia, 'Times New Roman', serif; }
 
   .head { background: #06111d; text-align: center; padding: 10px 0 8px; }
-  .rule-gold { height: 4px; background: #c9a24e; }
-  .rule-aqua { height: 3px; background: #29b6e8; }
 
   .wrap { padding: 16px 40px 8px; }
   .kicker { font-size: 7.5pt; letter-spacing: 2.5px; text-transform: uppercase; color: #8a97a6; }
@@ -63,15 +61,18 @@
 </head>
 <body>
 
-<div class="head">
-  <? if (data.logo) { ?>
-    <img src="<?!= data.logo ?>" style="width:240px; height:auto;">
-  <? } else { ?>
-    <div class="serif" style="font-size:26pt; font-weight:bold; color:#e3bd6a; letter-spacing:2px; padding:10px 0;"><?= data.biz.name ?></div>
-  <? } ?>
-</div>
-<div class="rule-gold"></div>
-<div class="rule-aqua"></div>
+<!-- Dark bands use table cells with bgcolor: Google's PDF converter drops background colors on divs. -->
+<table>
+  <tr><td class="head" bgcolor="#06111d" align="center">
+    <? if (data.logo) { ?>
+      <img src="<?!= data.logo ?>" style="width:240px; height:auto;">
+    <? } else { ?>
+      <div class="serif" style="font-size:26pt; font-weight:bold; color:#e3bd6a; letter-spacing:2px; padding:10px 0;"><?= data.biz.name ?></div>
+    <? } ?>
+  </td></tr>
+  <tr><td bgcolor="#c9a24e" style="height:4px; font-size:0; line-height:0;">&nbsp;</td></tr>
+  <tr><td bgcolor="#29b6e8" style="height:3px; font-size:0; line-height:0;">&nbsp;</td></tr>
+</table>
 
 <div class="wrap">
 
@@ -91,13 +92,13 @@
     </tr>
   </table>
 
-  <table class="due-box" style="margin-top:14px;">
+  <table class="due-box" bgcolor="#0b1f33" style="margin-top:14px;">
     <tr>
-      <td>
+      <td bgcolor="#0b1f33">
         <div class="lbl">AMOUNT DUE</div>
         <div class="amt serif"><?= data.balance ?></div>
       </td>
-      <td class="by">Please pay by<br><b><?= data.dueDate ?></b></td>
+      <td class="by" bgcolor="#0b1f33">Please pay by<br><b><?= data.dueDate ?></b></td>
     </tr>
   </table>
 
@@ -169,7 +170,7 @@
     <div class="msg"><?= data.message ?></div>
   <? } ?>
 
-  <table class="pay" style="margin-top:14px; background:#f3f6f9;">
+  <table class="pay" bgcolor="#f3f6f9" style="margin-top:14px; background:#f3f6f9;">
     <tr>
       <td style="width:50%; border-left:4px solid #29b6e8;">
         <div class="h">How to pay</div>

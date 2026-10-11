@@ -681,59 +681,102 @@ function testBillsEmail() {
   console.log('Test email sent to ' + to);
 }
 
-/** Big, bold, phone-first HTML for the bill-day email. Tables and inline styles so Gmail keeps the look. */
+/** The bill-day email to Tommy: total, a big Send button into the app, and who is getting one. */
 function billsReadyHtml_(r, nudge, s) {
-  const gold = '#e3bd6a', navy = '#06111d', card = '#0e2235', ink = '#eef3f8', muted = '#8fa4b9', aqua = '#29b6e8', red = '#ff8a8a';
-  const link = APP_URL + '?bills=1';
+  const E = EMAIL_COLORS;
   const n = r.clients.length;
-  const eyebrow = nudge ? 'STILL WAITING &middot; DAY ' + (nudge + 1) : 'BILL DAY';
-  const headline = nudge
-    ? esc_(r.month) + '\u2019s money is still sitting there.'
-    : esc_(r.month) + '\u2019s money is on the table.';
-  const sub = nudge
-    ? 'Nobody pays a bill they never got. Two taps and it\u2019s out the door.'
-    : 'You did the work. Now go get paid. Two taps and it\u2019s done.';
-  const button = (label) =>
-    '<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin:0 auto"><tr>' +
-    '<td align="center" bgcolor="' + gold + '" style="border-radius:14px;background:' + gold + ';background-image:linear-gradient(180deg,#f3d58f,#c99a3e);box-shadow:0 8px 24px rgba(227,189,106,.35)">' +
-    '<a href="' + link + '" style="display:inline-block;padding:18px 34px;font-family:Arial,Helvetica,sans-serif;font-size:18px;font-weight:900;letter-spacing:1px;color:#1a1204;text-decoration:none;border-radius:14px">' +
-    label + ' &rarr;</a></td></tr></table>';
-  const rows = r.clients.map((c, i) =>
-    '<tr><td style="padding:14px 0;border-top:' + (i ? '1px solid rgba(255,255,255,.07)' : '0') + '">' +
-      '<div style="font-size:16px;font-weight:800;color:' + ink + '">' + esc_(c.name) + '</div>' +
-      '<div style="font-size:13px;color:' + muted + ';padding-top:2px">' + c.count + ' item' + (c.count === 1 ? '' : 's') +
-      (c.noEmail ? ' &middot; <span style="color:' + gold + '">No email: hand it over</span>' : '') + '</div></td>' +
-    '<td align="right" style="padding:14px 0;border-top:' + (i ? '1px solid rgba(255,255,255,.07)' : '0') + ';font-size:17px;font-weight:800;color:' + ink + ';white-space:nowrap">' + money_(c.total) + '</td></tr>').join('');
-  const owedLine = r.alreadyOwedCount
-    ? '<tr><td style="padding:0 28px 26px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:rgba(41,182,232,.08);border:1px solid rgba(41,182,232,.25);border-radius:14px">' +
-      '<tr><td style="padding:14px 18px;font-size:14px;color:' + ink + '">Already out and unpaid: <b>' + money_(r.alreadyOwed) + '</b> on ' + r.alreadyOwedCount +
-      ' invoice' + (r.alreadyOwedCount === 1 ? '' : 's') + '. Check the Money tab.</td></tr></table></td></tr>'
+  const rows = r.clients.map(c => [
+    esc_(c.name),
+    c.count + ' item' + (c.count === 1 ? '' : 's') + (c.noEmail ? ' &middot; <span style="color:' + E.gold + '">No email: hand it over</span>' : ''),
+    money_(c.total),
+  ]);
+  const owed = r.alreadyOwedCount
+    ? emailBox_('', 'Already out and unpaid: <b>' + money_(r.alreadyOwed) + '</b> on ' + r.alreadyOwedCount +
+        ' invoice' + (r.alreadyOwedCount === 1 ? '' : 's') + '. Check the Money tab.', E.aqua)
     : '';
+  return brandEmail_({
+    preheader: money_(r.total) + ' ready for ' + n + ' customer' + (n === 1 ? '' : 's') + '. Tap Send Bills.',
+    eyebrow: nudge ? 'STILL WAITING &middot; DAY ' + (nudge + 1) : 'BILL DAY',
+    eyebrowColor: nudge ? E.red : E.aqua,
+    headline: esc_(r.month) + (nudge ? '\u2019s money is still sitting there.' : '\u2019s money is on the table.'),
+    amount: money_(r.total),
+    amountSub: n + ' customer' + (n === 1 ? '' : 's') + ' ready to bill',
+    button: { label: 'SEND ' + esc_(r.month.toUpperCase()) + ' BILLS', url: APP_URL + '?bills=1' },
+    sub: nudge ? 'Nobody pays a bill they never got. Two taps and it\u2019s out the door.'
+      : 'You did the work. Now go get paid. Two taps and it\u2019s done.',
+    sections: [
+      emailList_('WHO\u2019S GETTING ONE', rows, ['TOTAL', money_(r.total)]),
+      '<p style="margin:0 0 18px;text-align:center;font-size:13px;color:' + E.muted + '">Want to skip someone or fix a line? Uncheck them in the app, then send the rest.</p>',
+      owed,
+    ],
+  });
+}
 
-  return '<!doctype html><html><body style="margin:0;padding:0;background:' + navy + '">' +
-    '<div style="display:none;max-height:0;overflow:hidden;opacity:0">' + money_(r.total) + ' ready for ' + n + ' client' + (n === 1 ? '' : 's') + '. Tap Send Bills.</div>' +
-    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="' + navy + '" style="background:' + navy + '"><tr><td align="center" style="padding:0 10px 30px">' +
+// ============================================================
+// Branded email kit: dark navy card, gold money, one big button. Tables and inline styles
+// only, because Gmail and Apple Mail strip <style> blocks and flexbox.
+// ============================================================
+
+const EMAIL_COLORS = { gold: '#e3bd6a', navy: '#06111d', card: '#0e2235', ink: '#eef3f8', muted: '#8fa4b9', aqua: '#29b6e8', red: '#ff8a8a', green: '#4cd69a' };
+
+/**
+ * o = { preheader, eyebrow, eyebrowColor, headline, amount, amountSub, button: {label, url}, sub,
+ *       sections: [html], signoff: html, footerNote: html }. Every field but headline is optional.
+ */
+function brandEmail_(o) {
+  const E = EMAIL_COLORS;
+  const serif = 'Georgia,\'Times New Roman\',serif';
+  const row = (html, style) => '<tr><td style="' + style + '">' + html + '</td></tr>';
+  const button = o.button
+    ? '<table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin:0 auto"><tr>' +
+      '<td align="center" bgcolor="' + E.gold + '" style="border-radius:14px;background:' + E.gold + ';background-image:linear-gradient(180deg,#f3d58f,#c99a3e)">' +
+      '<a href="' + o.button.url + '" style="display:inline-block;padding:18px 34px;font-family:Arial,Helvetica,sans-serif;font-size:17px;font-weight:900;letter-spacing:1px;color:#1a1204;text-decoration:none;border-radius:14px">' +
+      o.button.label + ' &rarr;</a></td></tr></table>'
+    : '';
+  return '<!doctype html><html><body style="margin:0;padding:0;background:' + E.navy + '">' +
+    (o.preheader ? '<div style="display:none;max-height:0;overflow:hidden;opacity:0">' + o.preheader + '</div>' : '') +
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="' + E.navy + '" style="background:' + E.navy + '"><tr><td align="center" style="padding:0 10px 30px">' +
     '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:600px;font-family:Arial,Helvetica,sans-serif">' +
-      '<tr><td style="padding:0"><a href="' + link + '"><img src="' + APP_URL + 'banner.png" width="600" alt="Kurtside Pool Co." style="display:block;width:100%;max-width:600px;height:auto;border:0"></a></td></tr>' +
-      '<tr><td bgcolor="' + card + '" style="background:' + card + ';background-image:linear-gradient(180deg,#12304a,' + card + ');border:1px solid rgba(227,189,106,.22);border-radius:22px">' +
+      row('<img src="' + APP_URL + 'banner.png" width="600" alt="Kurtside Pool Co." style="display:block;width:100%;max-width:600px;height:auto;border:0">', 'padding:0') +
+      '<tr><td bgcolor="' + E.card + '" style="background:' + E.card + ';background-image:linear-gradient(180deg,#12304a,' + E.card + ');border:1px solid rgba(227,189,106,.22);border-radius:22px">' +
       '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">' +
-        '<tr><td align="center" style="padding:30px 28px 0;font-size:12px;font-weight:800;letter-spacing:4px;color:' + (nudge ? red : aqua) + '">' + eyebrow + '</td></tr>' +
-        '<tr><td align="center" style="padding:10px 28px 0;font-family:Georgia,\'Times New Roman\',serif;font-size:30px;line-height:1.2;font-weight:bold;color:' + ink + '">' + headline + '</td></tr>' +
-        '<tr><td align="center" style="padding:20px 28px 0;font-family:Georgia,\'Times New Roman\',serif;font-size:58px;line-height:1;font-weight:bold;color:' + gold + '">' + money_(r.total) + '</td></tr>' +
-        '<tr><td align="center" style="padding:10px 28px 0;font-size:15px;color:' + muted + '">' + n + ' client' + (n === 1 ? '' : 's') + ' ready to bill</td></tr>' +
-        '<tr><td align="center" style="padding:28px 28px 8px">' + button('SEND ' + esc_(r.month.toUpperCase()) + ' BILLS') + '</td></tr>' +
-        '<tr><td align="center" style="padding:6px 28px 28px;font-size:14px;color:' + muted + '">' + sub + '</td></tr>' +
-        '<tr><td style="padding:0 28px"><div style="height:1px;background:linear-gradient(90deg,transparent,rgba(227,189,106,.5),transparent);background-color:rgba(227,189,106,.25)"></div></td></tr>' +
-        '<tr><td style="padding:22px 28px 6px;font-family:Georgia,\'Times New Roman\',serif;font-size:13px;font-weight:bold;letter-spacing:3px;color:' + gold + '">WHO&rsquo;S GETTING ONE</td></tr>' +
-        '<tr><td style="padding:0 28px 18px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">' + rows +
-          '<tr><td style="padding:16px 0 0;border-top:1px solid rgba(227,189,106,.35);font-size:15px;font-weight:800;color:' + gold + '">TOTAL</td>' +
-          '<td align="right" style="padding:16px 0 0;border-top:1px solid rgba(227,189,106,.35);font-size:19px;font-weight:900;color:' + gold + '">' + money_(r.total) + '</td></tr>' +
-        '</table></td></tr>' +
-        '<tr><td align="center" style="padding:8px 28px 26px;font-size:13px;color:' + muted + '">Want to skip someone or fix a line? Open it, uncheck them, then send the rest.</td></tr>' +
-        owedLine +
+        (o.eyebrow ? row(o.eyebrow, 'padding:30px 28px 0;text-align:center;font-size:12px;font-weight:800;letter-spacing:4px;color:' + (o.eyebrowColor || E.aqua)) : '') +
+        row(o.headline, 'padding:' + (o.eyebrow ? '10px' : '30px') + ' 28px 0;text-align:center;font-family:' + serif + ';font-size:29px;line-height:1.2;font-weight:bold;color:' + E.ink) +
+        (o.amount ? row(o.amount, 'padding:20px 28px 0;text-align:center;font-family:' + serif + ';font-size:56px;line-height:1;font-weight:bold;color:' + E.gold) : '') +
+        (o.amountSub ? row(o.amountSub, 'padding:10px 28px 0;text-align:center;font-size:15px;color:' + E.muted) : '') +
+        (button ? row(button, 'padding:28px 28px 8px;text-align:center') : '') +
+        (o.sub ? row(o.sub, 'padding:6px 28px 26px;text-align:center;font-size:14px;color:' + E.muted) : row('', 'padding:0 0 22px')) +
+        row('<div style="height:1px;background-color:rgba(227,189,106,.3)"></div>', 'padding:0 28px 22px') +
+        row((o.sections || []).filter(Boolean).join(''), 'padding:0 28px 6px;color:' + E.ink + ';font-size:15px;line-height:1.5') +
+        (o.signoff ? row(o.signoff, 'padding:4px 28px 28px;color:' + E.ink + ';font-size:15px;line-height:1.5') : '') +
       '</table></td></tr>' +
-      '<tr><td align="center" style="padding:24px 10px 0;font-family:Georgia,\'Times New Roman\',serif;font-size:11px;letter-spacing:4px;color:#7d6a3f">MAINTENANCE &middot; OPENINGS &middot; CLOSINGS</td></tr>' +
+      row('MAINTENANCE &middot; OPENINGS &middot; CLOSINGS', 'padding:24px 10px 0;text-align:center;font-family:' + serif + ';font-size:11px;letter-spacing:4px;color:#7d6a3f') +
+      (o.footerNote ? row(o.footerNote, 'padding:10px 20px 0;text-align:center;font-size:12px;color:#5d6f82') : '') +
     '</table></td></tr></table></body></html>';
+}
+
+/** A titled list: rows of [name, small detail, amount], with an optional gold total row. */
+function emailList_(title, rows, totalRow) {
+  const E = EMAIL_COLORS;
+  const line = (r, i) => '<tr>' +
+    '<td style="padding:12px 0;border-top:' + (i ? '1px solid rgba(255,255,255,.07)' : '0') + '">' +
+      '<div style="font-size:15px;font-weight:800;color:' + E.ink + '">' + r[0] + '</div>' +
+      (r[1] ? '<div style="font-size:13px;color:' + E.muted + ';padding-top:2px">' + r[1] + '</div>' : '') + '</td>' +
+    '<td align="right" style="padding:12px 0;border-top:' + (i ? '1px solid rgba(255,255,255,.07)' : '0') + ';font-size:16px;font-weight:800;color:' + E.ink + ';white-space:nowrap">' + r[2] + '</td></tr>';
+  return '<div style="font-family:Georgia,\'Times New Roman\',serif;font-size:13px;font-weight:bold;letter-spacing:3px;color:' + E.gold + ';padding-bottom:4px">' + title + '</div>' +
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-bottom:18px">' + rows.map(line).join('') +
+    (totalRow ? '<tr><td style="padding:14px 0 0;border-top:1px solid rgba(227,189,106,.35);font-size:15px;font-weight:800;color:' + E.gold + '">' + totalRow[0] + '</td>' +
+      '<td align="right" style="padding:14px 0 0;border-top:1px solid rgba(227,189,106,.35);font-size:18px;font-weight:900;color:' + E.gold + '">' + totalRow[1] + '</td></tr>' : '') +
+    '</table>';
+}
+
+/** A tinted box with an optional small caps title. accent = left border color. */
+function emailBox_(title, html, accent) {
+  const E = EMAIL_COLORS;
+  return '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 18px;background:rgba(255,255,255,.04);border-left:4px solid ' + (accent || E.gold) + ';border-radius:10px">' +
+    '<tr><td style="padding:14px 18px;font-size:14px;line-height:1.55;color:' + E.ink + '">' +
+    (title ? '<div style="font-size:11px;font-weight:800;letter-spacing:2.5px;color:' + E.muted + ';padding-bottom:4px">' + title + '</div>' : '') +
+    html + '</td></tr></table>';
 }
 
 function recentJobs_(work, n, invoices) {
@@ -1681,39 +1724,91 @@ function shareByLink_(file) {
 // ============================================================
 
 function sendInvoiceEmail_(inv, pdf, s) {
-  const due = fmt_(inv.dueDate, 'EEEE, MMM d');
-  const body = '<p>Hi ' + esc_(firstName_(inv.clientName)) + ',</p>' +
-    '<p>Your invoice for pool service is attached.</p>' +
-    (String(inv.message || '').trim() ? '<p style="font-style:italic;color:#0b1f33">' + esc_(String(inv.message).trim()).replace(/\n/g, '<br>') + '</p>' : '') +
-    summaryBox_([['Invoice', '#' + inv.id], ['Amount due', money_(inv.balance)], ['Due by', due]]) +
-    howToPay_(s) + signoff_(s);
+  const E = EMAIL_COLORS;
+  const entries = readTable_(SHEETS.work)
+    .filter(w => String(w.invoiceId) === String(inv.id) && !toBool_(w.voided));
+  const rows = invoiceLines_(entries).map(l => [esc_(l.description), esc_(l.date), l.amount]);
+  const note = String(inv.message || '').trim();
+  const html = brandEmail_({
+    preheader: 'Invoice #' + inv.id + ': ' + money_(inv.balance) + ' due ' + fmt_(inv.dueDate, 'EEE, MMM d'),
+    eyebrow: 'INVOICE #' + inv.id,
+    headline: 'Hi ' + esc_(firstName_(inv.clientName)) + ', here\u2019s your pool bill.',
+    amount: money_(inv.balance),
+    amountSub: 'due ' + fmt_(inv.dueDate, 'EEEE, MMMM d'),
+    button: { label: 'VIEW YOUR INVOICE', url: pdf.getUrl() },
+    sub: 'The PDF is attached to this email too.',
+    sections: [
+      note ? emailBox_('', '<span style="font-family:Georgia,serif;font-style:italic;font-size:16px">' + esc_(note).replace(/\n/g, '<br>') + '</span>', E.gold) : '',
+      emailList_('WHAT\u2019S ON IT', rows, ['TOTAL DUE', money_(inv.balance)]),
+      payBox_(inv, s),
+    ],
+    signoff: signoff_(s),
+    footerNote: contactsNote_(s),
+  });
   sendClientEmail_(inv.email, 'Invoice #' + inv.id + ' from ' + s.BUSINESS_NAME + ': ' + money_(inv.balance) + ' due ' + fmt_(inv.dueDate, 'MMM d'),
-    body, s, [pdf.getBlob()]);
+    html, s, [pdf.getBlob()]);
 }
 
 function sendReminderEmail_(inv, level, maxLevel, daysLate, s) {
+  const E = EMAIL_COLORS;
   const isFinal = level >= maxLevel;
-  const opener = level === 1
-    ? 'Just a friendly reminder that invoice #' + inv.id + ' was due on ' + fmt_(inv.dueDate, 'MMM d') + '.'
-    : isFinal
-      ? 'Invoice #' + inv.id + ' is now ' + daysLate + ' days past due. Please get payment to me this week, or reply if something looks off.'
-      : 'Following up on invoice #' + inv.id + ', which is now ' + daysLate + ' days past due.';
-  const body = '<p>Hi ' + esc_(firstName_(inv.clientName)) + ',</p><p>' + esc_(opener) + '</p>' +
-    summaryBox_([['Invoice', '#' + inv.id], ['Balance', money_(inv.balance)], ['Was due', fmt_(inv.dueDate, 'MMM d, yyyy')]]) +
-    howToPay_(s) + '<p>If you already paid, thank you, and please ignore this.</p>' + signoff_(s);
+  const pdf = getInvoicePdf_(inv, s, true);
+  const html = brandEmail_({
+    preheader: 'Invoice #' + inv.id + ' was due ' + fmt_(inv.dueDate, 'MMM d') + '. Balance ' + money_(inv.balance) + '.',
+    eyebrow: isFinal ? 'FINAL REMINDER' : 'FRIENDLY REMINDER',
+    eyebrowColor: isFinal ? E.red : E.aqua,
+    headline: isFinal
+      ? 'Hi ' + esc_(firstName_(inv.clientName)) + ', this one is ' + daysLate + ' days past due.'
+      : 'Hi ' + esc_(firstName_(inv.clientName)) + ', just a quick nudge.',
+    amount: money_(inv.balance),
+    amountSub: 'on invoice #' + inv.id + ', due ' + fmt_(inv.dueDate, 'MMMM d'),
+    button: { label: 'VIEW YOUR INVOICE', url: pdf.getUrl() },
+    sub: isFinal ? 'Please get payment to me this week, or reply if something looks off.'
+      : 'Already paid? Thank you, and please ignore this.',
+    sections: [payBox_(inv, s)],
+    signoff: signoff_(s),
+    footerNote: contactsNote_(s),
+  });
   const subject = (isFinal ? 'Final reminder' : level === 1 ? 'Reminder' : 'Second reminder') +
     ': Invoice #' + inv.id + ' (' + money_(inv.balance) + ')';
-  sendClientEmail_(inv.email, subject, body, s, [getInvoicePdf_(inv, s, true).getBlob()]);
+  sendClientEmail_(inv.email, subject, html, s, [pdf.getBlob()]);
 }
 
 function sendReceiptEmail_(inv, payment, balanceAfter, s) {
+  const E = EMAIL_COLORS;
   const how = payment.method === 'Check' && payment.checkNo ? 'Check #' + payment.checkNo : payment.method;
-  const body = '<p>Hi ' + esc_(firstName_(inv.clientName)) + ',</p><p>Got it, thank you.</p>' +
-    summaryBox_([
-      ['Invoice', '#' + inv.id], ['Received', money_(payment.amount) + ' (' + how + ')'],
-      ['Date', fmt_(payment.date, 'MMM d, yyyy')], ['Remaining', balanceAfter > 0 ? money_(balanceAfter) : 'Paid in full'],
-    ]) + signoff_(s);
-  sendClientEmail_(inv.email, 'Payment received: Invoice #' + inv.id, body, s, []);
+  const paidUp = !(balanceAfter > 0);
+  const html = brandEmail_({
+    preheader: 'Got your ' + money_(payment.amount) + '. Thank you!',
+    eyebrow: 'PAYMENT RECEIVED',
+    eyebrowColor: E.green,
+    headline: 'Got it. Thank you, ' + esc_(firstName_(inv.clientName)) + '!',
+    amount: money_(payment.amount),
+    amountSub: esc_(how) + ' &middot; ' + fmt_(payment.date, 'MMMM d, yyyy'),
+    sections: [
+      emailList_('RECEIPT', [
+        ['Invoice #' + inv.id, '', money_(inv.total)],
+        ['This payment', esc_(how), money_(payment.amount)],
+      ], [paidUp ? 'PAID IN FULL' : 'STILL DUE', paidUp ? '&#10003;' : money_(balanceAfter)]),
+    ],
+    signoff: signoff_(s),
+    footerNote: contactsNote_(s),
+  });
+  sendClientEmail_(inv.email, 'Payment received: Invoice #' + inv.id, html, s, []);
+}
+
+/** How-to-pay box for client emails. */
+function payBox_(inv, s) {
+  const payTo = String(s.CHECKS_PAYABLE_TO || s.BUSINESS_NAME);
+  const mail = String(s.MAILING_ADDRESS || '').trim();
+  return emailBox_('HOW TO PAY', 'Cash or check. Make checks payable to <b>' + esc_(payTo) + '</b>' +
+    (mail ? ' and mail to ' + esc_(mail) + ', or hand it to ' + esc_(s.OWNER_NAME) + ' next visit.' : ' and hand it to ' + esc_(s.OWNER_NAME) + ' next visit.') +
+    '<br>Please write <b>#' + inv.id + '</b> on your check.', EMAIL_COLORS.aqua);
+}
+
+/** First emails from a new Gmail address often land in spam; this asks clients to save the address. */
+function contactsNote_(s) {
+  return 'Add ' + esc_(ownerEmail_(s)) + ' to your contacts so bills never end up in spam.';
 }
 
 function sendBillingSummary_(created, s) {
@@ -1729,16 +1824,15 @@ function sendBillingSummary_(created, s) {
 }
 
 /** Client-facing email. Tommy is BCC'd on everything so his inbox is a record. */
-function sendClientEmail_(to, subject, innerHtml, s, attachments) {
-  const logo = findAsset_(LOGO_FILE_NAME);
+/** html = a finished brandEmail_() page. Tommy gets a blind copy of everything clients receive. */
+function sendClientEmail_(to, subject, html, s, attachments) {
   MailApp.sendEmail({
     to: to,
     bcc: ownerEmail_(s),
     replyTo: ownerEmail_(s),
     name: String(s.BUSINESS_NAME),
     subject: subject,
-    htmlBody: emailShell_(innerHtml, s, !!logo),
-    inlineImages: logo ? { logo: logo } : undefined,
+    htmlBody: html,
     attachments: attachments,
   });
 }
@@ -1755,22 +1849,10 @@ function emailShell_(innerHtml, s, withLogo) {
     head + '<div style="height:4px;background:#29b6e8;margin:8px 0 16px"></div>' + innerHtml + '</div>';
 }
 
-function summaryBox_(pairs) {
-  return '<table style="border-collapse:collapse;margin:12px 0;background:#f3f6f9;border-left:4px solid #d4a64a;width:100%">' +
-    pairs.map(([k, v]) => '<tr><td style="padding:6px 12px;color:#5b6b7b">' + esc_(k) + '</td><td style="padding:6px 12px;text-align:right"><b>' + esc_(v) + '</b></td></tr>').join('') +
-    '</table>';
-}
-
-function howToPay_(s) {
-  const payTo = String(s.CHECKS_PAYABLE_TO || s.BUSINESS_NAME);
-  const mail = String(s.MAILING_ADDRESS || '').trim();
-  return '<p><b>How to pay:</b> cash or check. Make checks payable to <b>' + esc_(payTo) + '</b>' +
-    (mail ? ' and mail to ' + esc_(mail) + ', or hand it to me next visit.' : ' and hand it to me next visit.') + '</p>';
-}
-
 function signoff_(s) {
   const phone = String(s.BUSINESS_PHONE || '').trim();
-  return '<p>Thanks,<br>' + esc_(s.OWNER_NAME) + '<br>' + esc_(s.BUSINESS_NAME) + (phone ? '<br>' + esc_(phone) : '') + '</p>';
+  return '<p style="margin:0">Thanks,<br><span style="font-family:Georgia,serif;font-size:20px;font-weight:bold;color:#e3bd6a">' + esc_(s.OWNER_NAME) + '</span><br>' +
+    '<span style="color:#8fa4b9">' + esc_(s.BUSINESS_NAME) + (phone ? ' &middot; ' + esc_(phone) : '') + '</span></p>';
 }
 
 // ============================================================
