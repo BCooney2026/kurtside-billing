@@ -517,8 +517,14 @@
       </div>
       ${S.custom ? `
         <div class="card" style="margin-top:12px">
+          ${(d.otherSuggestions || []).length ? `
+            <div class="muted" style="margin-bottom:8px">Tap one you've done before:</div>
+            <div class="chips" style="margin-bottom:14px">
+              ${d.otherSuggestions.map((o, i) => `<div class="chip ${S.custom.description === o.description && Number(S.custom.price) === o.price ? 'sel' : ''}" role="button" tabindex="0" onclick="pickOther(${i})">${esc(o.description)} <span class="p">${money(o.price)}</span></div>`).join('')}
+            </div>
+            <div class="muted" style="margin-bottom:8px">Or something new:</div>` : ''}
           <label class="field"><span>What was it?</span>
-            <input class="input" id="customDesc" value="${esc(S.custom.description)}" placeholder="Chemicals, part, repair..." oninput="S.custom.description = this.value"></label>
+            <input class="input" id="customDesc" value="${esc(S.custom.description)}" placeholder="Leaf cleanup, repair, part..." oninput="S.custom.description = this.value"></label>
           <label class="field" style="margin:0"><span>Charge</span>
             <input class="input" id="customPrice" type="number" inputmode="decimal" step="0.01" value="${esc(S.custom.price)}" placeholder="0.00" oninput="S.custom.price = this.value; updateLogButton()"></label>
         </div>` : ''}
@@ -617,6 +623,13 @@
     renderLog();
   }
 
+  /** One tap on a past "Other" job fills in its name and last price. */
+  function pickOther(i) {
+    const o = S.data.otherSuggestions[i];
+    S.custom = { description: o.description, price: o.price };
+    renderLog();
+  }
+
   function toggleCredit() {
     S.credit = S.credit ? null : { description: '', price: '' };
     renderLog();
@@ -626,7 +639,7 @@
   function toggleCustom() {
     S.custom = S.custom ? null : { description: '', price: '' };
     renderLog();
-    if (S.custom) $('customDesc').focus();
+    if (S.custom && !(S.data.otherSuggestions || []).length) $('customDesc').focus();
   }
 
   async function logWork() {

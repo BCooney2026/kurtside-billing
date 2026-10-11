@@ -502,6 +502,7 @@ function bootstrap_() {
       qty: Number(w.qty) || 1, amount: Number(w.amount) || 0, note: String(w.note), invoiceId: w.invoiceId ? String(w.invoiceId) : '',
     })),
     lastNotes: lastNotesByClient_(work),
+    otherSuggestions: otherSuggestions_(work),
     unbilledTotal: sumAmounts_(unbilled),
     unbilledCount: unbilled.length,
     openInvoices: invoices.filter(i => i.status === 'Open'),
@@ -511,6 +512,42 @@ function bootstrap_() {
     stripReader: !!PropertiesService.getScriptProperties().getProperty(PROP_API_KEY),
   };
 }
+
+/**
+ * Tommy's past "+ Other" jobs as one-tap suggestions: [{ description, price }], most used first.
+ * Same description (any capitalization) counts once, using the price he charged most recently.
+ */
+function otherSuggestions_(work) {
+  const byName = {};
+  work.forEach(w => {
+    if (w.itemId !== 'CUSTOM' || toBool_(w.voided)) return;
+    const description = String(w.description || '').trim();
+    if (!description) return;
+    const k = description.toLowerCase();
+    const prev = byName[k];
+    const when = w.date instanceof Date ? w.date.getTime() : 0;
+    if (!prev) byName[k] = { description, price: Number(w.unitPrice) || 0, count: 1, when };
+    else {
+      prev.count++;
+      if (when >= prev.when) { prev.when = when; prev.price = Number(w.unitPrice) || 0; prev.description = description; }
+    }
+  });
+  const used = Object.keys(byName).map(k => byName[k])
+    .sort((a, b) => b.count - a.count || b.when - a.when)
+    .map(x => ({ description: x.description, price: x.price }));
+  // Day one there is no history, so start with the one-off jobs from Tommy's paper invoices.
+  // His own history wins: a starter he has already used (any capitalization) is not repeated.
+  const starters = OTHER_STARTERS.filter(o => !byName[o.description.toLowerCase()]);
+  return used.concat(starters).slice(0, 8);
+}
+
+/** One-off jobs seen on Tommy's paper invoices, offered under "+ Other" until his own history fills in. */
+const OTHER_STARTERS = [
+  { description: 'Leaf Cleanup', price: 150 },
+  { description: 'Install New Pump', price: 50 },
+  { description: 'Fix Auto Fill', price: 125 },
+  { description: 'Repair Outside Faucet', price: 75 },
+];
 
 /** Most recent non-empty note per client: { clientId: { date:'yyyy-MM-dd', note } }. */
 function lastNotesByClient_(work) {
