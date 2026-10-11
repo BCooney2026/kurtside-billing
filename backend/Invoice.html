@@ -1,58 +1,88 @@
 <!DOCTYPE html>
 <!--
   Kurtside Pool Co. invoice layout.
-  Rendered by buildInvoicePdf_() in Code.gs and converted to PDF.
-  The PDF converter has limited CSS support: tables for layout, no flexbox/grid.
-  Everything it needs arrives in the `data` object.
+  Rendered by buildInvoicePdf_() in Code.gs and converted to PDF by Google.
+  That converter has limited CSS: tables for layout, solid colors (no gradients, flexbox or grid),
+  images as data URIs. Everything it needs arrives in the `data` object.
+  Brand: navy #0b1f33 / deep #06111d, gold #c9a24e (print-safe version of the app's #e3bd6a), aqua #29b6e8.
 -->
 <html>
 <head>
 <meta charset="utf-8">
 <style>
-  body { font-family: Arial, Helvetica, sans-serif; color: #0b1f33; font-size: 10.5pt; margin: 0; }
+  @page { size: letter; margin: 0; }
+  body { font-family: Arial, Helvetica, sans-serif; color: #0b1f33; font-size: 10pt; margin: 0; }
   table { border-collapse: collapse; width: 100%; }
-  .bar { height: 8px; background: #29b6e8; }
-  .gold { height: 3px; background: #d4a64a; }
-  .wrap { padding: 26px 34px 20px; }
-  .title { font-size: 28pt; font-weight: bold; letter-spacing: 3px; text-align: right; margin: 0 0 8px; }
-  .meta td { padding: 2px 0; font-size: 10pt; }
-  .meta .k { color: #5b6b7b; text-align: right; padding-right: 12px; }
-  .meta .v { text-align: right; font-weight: bold; width: 110px; }
-  .label { font-size: 8pt; letter-spacing: 1.5px; text-transform: uppercase; color: #5b6b7b; margin-bottom: 3px; }
-  .party { font-size: 10.5pt; line-height: 1.4; }
-  .lines th { background: #0b1f33; color: #ffffff; font-size: 8.5pt; letter-spacing: 1px; text-transform: uppercase; padding: 8px; text-align: left; }
-  .lines td { padding: 8px; border-bottom: 1px solid #dde3ea; vertical-align: top; }
-  .lines tr.alt td { background: #f6f8fb; }
-  .num { text-align: right; }
-  .note { color: #5b6b7b; font-size: 9pt; }
-  .totals td { padding: 5px 8px; }
-  .totals .k { text-align: right; color: #5b6b7b; }
-  .totals .v { text-align: right; width: 110px; }
-  .due td { background: #0b1f33; color: #ffffff; font-weight: bold; font-size: 12.5pt; padding: 9px 8px; }
-  .due .v { color: #d4a64a; }
-  .pay { margin-top: 22px; background: #f3f6f9; border-left: 4px solid #d4a64a; padding: 12px 14px; font-size: 10pt; line-height: 1.5; }
-  .thanks { text-align: center; margin-top: 26px; font-size: 11pt; font-weight: bold; }
-  .foot { text-align: center; color: #5b6b7b; font-size: 8.5pt; margin-top: 4px; }
+  .serif { font-family: Georgia, 'Times New Roman', serif; }
+
+  .head { background: #06111d; text-align: center; padding: 10px 0 8px; }
+  .rule-gold { height: 4px; background: #c9a24e; }
+  .rule-aqua { height: 3px; background: #29b6e8; }
+
+  .wrap { padding: 16px 40px 8px; }
+  .kicker { font-size: 7.5pt; letter-spacing: 2.5px; text-transform: uppercase; color: #8a97a6; }
+  .title { font-size: 30pt; font-weight: bold; letter-spacing: 1px; color: #0b1f33; line-height: 1; }
+  .num { color: #c9a24e; }
+  .meta td { padding: 2px 0; font-size: 9.5pt; }
+  .meta .k { color: #8a97a6; text-align: right; padding-right: 12px; }
+  .meta .v { text-align: right; font-weight: bold; width: 105px; }
+
+  .due-box { background: #0b1f33; color: #ffffff; }
+  .due-box td { padding: 11px 18px; vertical-align: middle; }
+  .due-box .lbl { font-size: 7.5pt; letter-spacing: 2.5px; color: #8fa4b9; }
+  .due-box .amt { font-size: 26pt; font-weight: bold; color: #e3bd6a; line-height: 1.1; }
+  .due-box .by { font-size: 10pt; color: #ffffff; text-align: right; }
+  .due-box .by b { color: #e3bd6a; }
+
+  .party { font-size: 10pt; line-height: 1.45; }
+  .party b { font-size: 11pt; }
+  .card { border: 1px solid #e3e8ee; border-top: 3px solid #c9a24e; padding: 10px 14px; }
+
+  .lines th { font-size: 7.5pt; letter-spacing: 1.5px; text-transform: uppercase; color: #8a97a6; text-align: left;
+              padding: 0 8px 7px; border-bottom: 2px solid #0b1f33; }
+  .lines td { padding: 6px 8px; border-bottom: 1px solid #e9edf2; vertical-align: top; }
+  .lines tr.alt td { background: #f7f9fb; }
+  .lines .d { color: #8a97a6; white-space: nowrap; }
+  .lines .r { text-align: right; white-space: nowrap; }
+  .lines .neg { color: #b8423a; }
+  .lines .desc { font-weight: bold; }
+
+  .totals td { padding: 4px 8px; font-size: 10pt; }
+  .totals .k { text-align: right; color: #8a97a6; }
+  .totals .v { text-align: right; width: 105px; }
+  .balance td { padding: 10px 8px; border-top: 2px solid #0b1f33; font-weight: bold; font-size: 12pt; }
+  .balance .v { color: #0b1f33; }
+
+  .msg { margin-top: 14px; padding: 12px 16px; background: #fbf7ee; border-left: 4px solid #c9a24e;
+         font-family: Georgia, 'Times New Roman', serif; font-style: italic; font-size: 11pt; white-space: pre-wrap; }
+  .pay td { padding: 12px 16px; font-size: 9.5pt; line-height: 1.5; vertical-align: top; }
+  .pay .h { font-size: 7.5pt; letter-spacing: 2.5px; color: #8a97a6; text-transform: uppercase; }
+  .thanks { text-align: center; margin-top: 12px; font-size: 13pt; font-style: italic; color: #0b1f33; }
+  .foot { text-align: center; color: #c9a24e; font-size: 7.5pt; letter-spacing: 3px; margin-top: 6px; }
 </style>
 </head>
 <body>
-<div class="bar"></div>
-<div class="gold"></div>
+
+<div class="head">
+  <? if (data.logo) { ?>
+    <img src="<?!= data.logo ?>" style="width:240px; height:auto;">
+  <? } else { ?>
+    <div class="serif" style="font-size:26pt; font-weight:bold; color:#e3bd6a; letter-spacing:2px; padding:10px 0;"><?= data.biz.name ?></div>
+  <? } ?>
+</div>
+<div class="rule-gold"></div>
+<div class="rule-aqua"></div>
+
 <div class="wrap">
 
   <table>
     <tr>
-      <td style="width:55%; vertical-align:top;">
-        <? if (data.logo) { ?>
-          <img src="<?!= data.logo ?>" style="width:175px; height:auto;">
-        <? } else { ?>
-          <div style="font-size:22pt; font-weight:bold;"><?= data.biz.name ?></div>
-        <? } ?>
+      <td style="vertical-align:bottom;">
+        <div class="kicker">Invoice</div>
+        <div class="title serif">No. <span class="num"><?= data.number ?></span></div>
       </td>
-      <td style="vertical-align:top;">
-        <div class="title">INVOICE</div>
+      <td style="vertical-align:bottom; width:230px;">
         <table class="meta">
-          <tr><td class="k">Invoice #</td><td class="v"><?= data.number ?></td></tr>
           <tr><td class="k">Date</td><td class="v"><?= data.invoiceDate ?></td></tr>
           <tr><td class="k">Terms</td><td class="v"><?= data.terms ?></td></tr>
           <tr><td class="k">Due</td><td class="v"><?= data.dueDate ?></td></tr>
@@ -61,73 +91,101 @@
     </tr>
   </table>
 
-  <table style="margin-top:22px;">
+  <table class="due-box" style="margin-top:14px;">
     <tr>
-      <td style="width:55%; vertical-align:top;">
-        <div class="label">Bill to</div>
-        <div class="party">
-          <b><?= data.client.name ?></b><br>
-          <? if (data.client.address) { ?><?= data.client.address ?><br><? } ?>
-          <? if (data.client.email) { ?><?= data.client.email ?><? } ?>
+      <td>
+        <div class="lbl">AMOUNT DUE</div>
+        <div class="amt serif"><?= data.balance ?></div>
+      </td>
+      <td class="by">Please pay by<br><b><?= data.dueDate ?></b></td>
+    </tr>
+  </table>
+
+  <table style="margin-top:16px;">
+    <tr>
+      <td style="width:50%; vertical-align:top; padding-right:8px;">
+        <div class="card">
+          <div class="kicker" style="margin-bottom:4px;">Bill to</div>
+          <div class="party">
+            <b><?= data.client.name ?></b><br>
+            <? if (data.client.address) { ?><?= data.client.address ?><br><? } ?>
+            <? if (data.client.email) { ?><?= data.client.email ?><? } ?>
+          </div>
         </div>
       </td>
-      <td style="vertical-align:top;">
-        <div class="label">From</div>
-        <div class="party">
-          <b><?= data.biz.name ?></b><br>
-          <?= data.biz.owner ?><br>
-          <? if (data.biz.phone) { ?><?= data.biz.phone ?><br><? } ?>
-          <?= data.biz.email ?>
+      <td style="width:50%; vertical-align:top; padding-left:8px;">
+        <div class="card">
+          <div class="kicker" style="margin-bottom:4px;">From</div>
+          <div class="party">
+            <b><?= data.biz.name ?></b><br>
+            <?= data.biz.owner ?><? if (data.biz.phone) { ?> &nbsp;&middot;&nbsp; <?= data.biz.phone ?><? } ?><br>
+            <?= data.biz.email ?>
+          </div>
         </div>
       </td>
     </tr>
   </table>
 
-  <table class="lines" style="margin-top:22px;">
+  <table class="lines" style="margin-top:16px;">
     <tr>
-      <th style="width:70px;">Date</th>
-      <th>Description</th>
-      <th class="num" style="width:40px;">Qty</th>
-      <th class="num" style="width:80px;">Rate</th>
-      <th class="num" style="width:90px;">Amount</th>
+      <th style="width:58px;">Date</th>
+      <th>Service</th>
+      <th class="r" style="width:36px; text-align:right;">Qty</th>
+      <th class="r" style="width:74px; text-align:right;">Rate</th>
+      <th class="r" style="width:84px; text-align:right;">Amount</th>
     </tr>
-    <? data.lines.forEach(function (line, i) { ?>
+    <? data.lines.forEach(function (line, i) { var neg = String(line.amount).charAt(0) === '-'; ?>
       <tr class="<?= i % 2 ? 'alt' : '' ?>">
-        <td><?= line.date ?></td>
-        <td>
+        <td class="d"><?= line.date ?></td>
+        <td class="<?= neg ? 'neg' : 'desc' ?>">
           <?= line.description ?>
-          <? if (line.note) { ?><br><span class="note"><?= line.note ?></span><? } ?>
+          <? if (line.note) { ?><br><span style="color:#8a97a6; font-weight:normal;"><?= line.note ?></span><? } ?>
         </td>
-        <td class="num"><?= line.qty ?></td>
-        <td class="num"><?= line.rate ?></td>
-        <td class="num"><?= line.amount ?></td>
+        <td class="r"><?= line.qty ?></td>
+        <td class="r<?= neg ? ' neg' : '' ?>"><?= line.rate ?></td>
+        <td class="r<?= neg ? ' neg' : '' ?>"><b><?= line.amount ?></b></td>
       </tr>
     <? }); ?>
   </table>
 
-  <table class="totals" style="margin-top:8px;">
-    <tr><td class="k">Total</td><td class="v"><?= data.total ?></td></tr>
-    <? if (data.paid) { ?>
-      <tr><td class="k">Paid</td><td class="v">-<?= data.paid ?></td></tr>
-    <? } ?>
-  </table>
-  <table class="due">
-    <tr><td style="text-align:right;">Balance due by <?= data.dueDate ?></td><td class="v" style="text-align:right; width:110px;"><?= data.balance ?></td></tr>
+  <table style="margin-top:6px;">
+    <tr>
+      <td></td>
+      <td style="width:260px;">
+        <table class="totals">
+          <tr><td class="k">Total</td><td class="v"><?= data.total ?></td></tr>
+          <? if (data.paid) { ?>
+            <tr><td class="k">Paid</td><td class="v">-<?= data.paid ?></td></tr>
+          <? } ?>
+        </table>
+        <table class="balance">
+          <tr><td style="text-align:right;">Balance due</td><td class="v" style="text-align:right; width:105px;"><?= data.balance ?></td></tr>
+        </table>
+      </td>
+    </tr>
   </table>
 
   <? if (data.message) { ?>
-    <div style="margin-top:18px; padding:12px 14px; border-left:4px solid #d4a64a; background:#faf6ec; font-style:italic; color:#0b1f33; white-space:pre-wrap;"><?= data.message ?></div>
+    <div class="msg"><?= data.message ?></div>
   <? } ?>
 
-  <div class="pay">
-    <b>How to pay:</b> cash or check.<br>
-    Make checks payable to <b><?= data.biz.payableTo ?></b>.
-    <? if (data.biz.mailTo) { ?><br>Mail to: <?= data.biz.mailTo ?><? } ?>
-    <br>Or hand payment to <?= data.biz.owner ?> on the next visit. Please write the invoice # on your check.
-  </div>
+  <table class="pay" style="margin-top:14px; background:#f3f6f9;">
+    <tr>
+      <td style="width:50%; border-left:4px solid #29b6e8;">
+        <div class="h">How to pay</div>
+        Cash or check. Make checks payable to<br><b><?= data.biz.payableTo ?></b><br>
+        Hand it to <?= data.biz.owner ?> on the next visit<? if (data.biz.mailTo) { ?>, or mail to <?= data.biz.mailTo ?><? } ?>.
+      </td>
+      <td style="width:50%;">
+        <div class="h">Please note</div>
+        Write invoice <b>#<?= data.number ?></b> on your check.<br>
+        Questions? Reply to the email or call <?= data.biz.owner ?><? if (data.biz.phone) { ?> at <?= data.biz.phone ?><? } ?>.
+      </td>
+    </tr>
+  </table>
 
-  <div class="thanks">Thank you for your business.</div>
-  <div class="foot"><?= data.biz.name ?> &nbsp;&bull;&nbsp; Maintenance &nbsp;&bull;&nbsp; Openings &nbsp;&bull;&nbsp; Closings</div>
+  <div class="thanks serif">Thank you for trusting us with your pool.</div>
+  <div class="foot"><?= data.biz.name.toUpperCase() ?></div>
 
 </div>
 </body>

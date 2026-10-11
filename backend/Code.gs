@@ -1621,7 +1621,7 @@ function getInvoicePdf_(inv, s) {
 function buildInvoicePdf_(inv, client, entries, s) {
   const template = HtmlService.createTemplateFromFile('Invoice');
   template.data = {
-    logo: dataUri_(findAsset_(LOGO_FILE_NAME)),
+    logo: invoiceLogo_(),
     biz: {
       name: String(s.BUSINESS_NAME || ''), owner: String(s.OWNER_NAME || ''), phone: String(s.BUSINESS_PHONE || ''),
       email: ownerEmail_(s), payableTo: String(s.CHECKS_PAYABLE_TO || s.BUSINESS_NAME || ''), mailTo: String(s.MAILING_ADDRESS || ''),
@@ -1644,6 +1644,20 @@ function buildInvoicePdf_(inv, client, entries, s) {
   const file = DriveApp.getFolderById(s.INVOICE_FOLDER_ID).createFile(blob);
   shareByLink_(file);
   return file;
+}
+
+/**
+ * The header art for invoice PDFs: the app's banner from GitHub Pages (one source of truth for the
+ * brand), else Logo.png from Drive, else '' and the template prints the business name instead.
+ */
+function invoiceLogo_() {
+  try {
+    const res = UrlFetchApp.fetch(APP_URL + 'banner.png', { muteHttpExceptions: true });
+    if (res.getResponseCode() === 200) return dataUri_(res.getBlob());
+  } catch (e) {
+    console.warn('Banner fetch failed: ' + e);
+  }
+  return dataUri_(findAsset_(LOGO_FILE_NAME));
 }
 
 /**
